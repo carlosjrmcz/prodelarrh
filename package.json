@@ -1,0 +1,25 @@
+{
+  "name": "prodelar-rh",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "serve:local": "node scripts/local-server.mjs",
+    "build": "vite build && node scripts/prepare-static-dist.mjs",
+    "preview": "vite preview --host 127.0.0.1",
+    "process:paystubs": "/Users/home/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3 scripts/process-paystubs.py",
+    "process:registration-cards": "/Users/home/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3 scripts/process-registration-cards.py",
+    "process:vacation-forecasts": "/Users/home/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3 scripts/process-vacation-forecasts.py",
+    "import:registration-cards": "/Users/home/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3 scripts/import-registration-cards-to-supabase-curl.py",
+    "setup:google-workspace": "node scripts/configure-google-workspace.mjs",
+    "setup:google-drive-folders": "node scripts/setup-google-drive-folders.mjs"
+  },
+  "dependencies": {
+    "@supabase/ssr": "^0.7.0",
+    "@supabase/supabase-js": "^2.106.0",
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^5.7.284",
+    "vite": "^6.3.5"
+  }
+}

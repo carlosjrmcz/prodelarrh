@@ -1,0 +1,13 @@
+node_modules
+dist
+.tools
+.env*
+production
+docs
+supabase
+scripts/*.py
+*.rtf
+*.pdf
+*.zip
+*.tar.gz
+.DS_Store

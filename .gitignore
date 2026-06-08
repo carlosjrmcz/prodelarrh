@@ -1,0 +1,10 @@
+node_modules
+dist
+.tools
+.env
+.env.local
+.env.google-workspace.local
+.env.google-workspace.filled.local
+.env.supabase-cli.local
+services/googleWorkspaceConfig.js
+.tmp-*
