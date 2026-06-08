@@ -6,8 +6,13 @@ import { createClient } from "@supabase/supabase-js";
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const registryPath = path.join(rootDir, "production", "fichas-funcionais", "saida", "employee-registration-cards.json");
 
-const supabaseUrl = process.env.VITE_SUPABASE_URL || "https://vncgdelxlevdndnyjyth.supabase.co";
-const supabaseKey = process.env.VITE_SUPABASE_PUBLISHABLE_KEY || "sb_publishable_8Cob4xt50ZC_UGD472vkrQ_IL-NUrWB";
+const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
+const supabaseKey = process.env.VITE_SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+
+if (!supabaseUrl || !supabaseKey) {
+  throw new Error("Configure VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY antes de rodar este script.");
+}
+
 const supabase = createClient(supabaseUrl, supabaseKey, { auth: { persistSession: false } });
 
 function normalizeCode(value) {

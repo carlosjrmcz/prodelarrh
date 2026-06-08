@@ -11,8 +11,11 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).resolve().parents[1]
 REGISTRY_PATH = ROOT_DIR / "production" / "fichas-funcionais" / "saida" / "employee-registration-cards.json"
 
-SUPABASE_URL = os.environ.get("VITE_SUPABASE_URL", "https://vncgdelxlevdndnyjyth.supabase.co").rstrip("/")
-SUPABASE_KEY = os.environ.get("VITE_SUPABASE_PUBLISHABLE_KEY", "sb_publishable_8Cob4xt50ZC_UGD472vkrQ_IL-NUrWB")
+SUPABASE_URL = (os.environ.get("VITE_SUPABASE_URL") or os.environ.get("SUPABASE_URL") or "").rstrip("/")
+SUPABASE_KEY = os.environ.get("VITE_SUPABASE_ANON_KEY") or os.environ.get("VITE_SUPABASE_PUBLISHABLE_KEY") or ""
+
+if not SUPABASE_URL or not SUPABASE_KEY:
+    raise RuntimeError("Configure VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY antes de rodar este script.")
 
 
 def normalize_code(value, limit=32):

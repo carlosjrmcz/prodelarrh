@@ -1,9 +1,13 @@
 import { createClient } from "@supabase/supabase-js";
 
-const supabase = createClient(
-  "https://vncgdelxlevdndnyjyth.supabase.co",
-  "sb_publishable_8Cob4xt50ZC_UGD472vkrQ_IL-NUrWB",
-);
+const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
+const supabaseKey = process.env.VITE_SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+
+if (!supabaseUrl || !supabaseKey) {
+  throw new Error("Configure VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY antes de rodar este script.");
+}
+
+const supabase = createClient(supabaseUrl, supabaseKey);
 
 const today = new Date().toISOString().slice(0, 10);
 const now = new Date().toISOString();

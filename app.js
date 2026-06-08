@@ -1,5 +1,20 @@
-const supabaseUrl = "https://vncgdelxlevdndnyjyth.supabase.co";
-const supabaseKey = "sb_publishable_8Cob4xt50ZC_UGD472vkrQ_IL-NUrWB";
+function readRuntimeEnv() {
+  const runtimeEnv = window.PRODELAR_RH_ENV || window.__PRODELAR_RH_ENV__ || {};
+  const viteEnv = (() => {
+    try {
+      return Function("return import.meta.env")() || {};
+    } catch {
+      return {};
+    }
+  })();
+  return { ...viteEnv, ...runtimeEnv };
+}
+
+const runtimeEnv = readRuntimeEnv();
+const SUPABASE_URL = runtimeEnv.VITE_SUPABASE_URL || "";
+const SUPABASE_ANON_KEY = runtimeEnv.VITE_SUPABASE_ANON_KEY || runtimeEnv.VITE_SUPABASE_PUBLISHABLE_KEY || "";
+const supabaseUrl = SUPABASE_URL;
+const supabaseKey = SUPABASE_ANON_KEY;
 const APP_VERSION = "20260522-controls-rh-active-6";
 
 if (window.location.protocol === "file:") {
