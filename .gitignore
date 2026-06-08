@@ -8,3 +8,35 @@ dist
 .env.supabase-cli.local
 services/googleWorkspaceConfig.js
 .tmp-*
+
+# macOS
+.DS_Store
+**/.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Supabase CLI
+supabase/.temp/
+.supabase/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Build
+.netlify/
+.vercel/
+
+# Secrets e tokens sensíveis
+RH_prodelar_Token Refresh.rtf
+*.rtf
+.env.*.local
+
+# Ferramentas locais
+
+# Temporários
+*.tmp
+*.bak
