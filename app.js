@@ -2115,7 +2115,7 @@ function dashboard() {
           ${
             actionable.slice(0, 5).map((request) =>
               `<div class="check ${request.status === "Aguardando aprovação" ? "blocked" : ""}"><span class="box">!</span><div><strong>${request.protocol} · ${request.title}</strong><br><span>${request.status} com ${request.owner} · próximo ${request.next || "definir"}</span></div></div>`,
-            ).join("") || (passwordResetQueue.length ? "" : `<div class="check done"><span class="box">✓</span><div><strong>Nenhuma pendência direta</strong><br><span>Troque o perfil para simular outras mesas de trabalho.</span></div></div>`)
+            ).join("") || (passwordResetQueue.length ? "" : `<div class="check done"><span class="box">✓</span><div><strong>Nenhuma pendência direta</strong><br><span>Não há itens aguardando ação para o seu usuário.</span></div></div>`)
           }
         </div>
       </div>
@@ -4473,7 +4473,7 @@ function savePeopleControlEvent(moduleKey) {
     summary,
   };
   savePeopleControlEventStore([entry, ...peopleControlEventStore()]);
-  state.peopleControlMessage = `${module.title} registrado para ${employeeName}. ${summary ? `${summary}. ` : ""}Lançamento salvo na rotina de Controles RH e vinculado à linha do tempo em modo teste.`;
+  state.peopleControlMessage = `${module.title} registrado para ${employeeName}. ${summary ? `${summary}. ` : ""}Lançamento salvo na rotina de Controles RH e vinculado à linha do tempo do colaborador.`;
   renderPage();
 }
 
@@ -5236,7 +5236,7 @@ function openPage(page) {
     return;
   }
   if (!canAccessPage(page)) {
-    state.formMessage = `O perfil ${currentUser.profile} não tem acesso a esta tela. Troque o perfil de teste ou use o menu disponível.`;
+    state.formMessage = `O perfil ${currentUser.profile} não tem acesso a esta tela. Use uma rotina disponível para o seu usuário.`;
     state.page = currentUser.homePage;
     updatePageUrl(state.page, true);
     renderPage();
