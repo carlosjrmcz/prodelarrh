@@ -189,7 +189,8 @@ button {
 }
 
 .profile-switcher,
-.person-switcher {
+.person-switcher,
+.identity-lock {
   min-height: 42px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -204,8 +205,17 @@ button {
   max-width: 340px;
 }
 
+.identity-lock {
+  align-items: flex-start;
+  display: grid;
+  gap: 2px;
+  min-width: 220px;
+}
+
 .profile-switcher span,
-.person-switcher span {
+.person-switcher span,
+.identity-lock span,
+.identity-lock small {
   color: var(--muted);
   font-size: 11px;
   font-weight: 800;
@@ -227,7 +237,8 @@ button {
 }
 
 .profile-switcher strong,
-.person-switcher strong {
+.person-switcher strong,
+.identity-lock strong {
   color: var(--ink);
   font-size: 15px;
   line-height: 1.1;

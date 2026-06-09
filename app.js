@@ -15,7 +15,7 @@ const SUPABASE_URL = runtimeEnv.VITE_SUPABASE_URL || "";
 const SUPABASE_ANON_KEY = runtimeEnv.VITE_SUPABASE_ANON_KEY || runtimeEnv.VITE_SUPABASE_PUBLISHABLE_KEY || "";
 const supabaseUrl = SUPABASE_URL;
 const supabaseKey = SUPABASE_ANON_KEY;
-const APP_VERSION = "20260522-controls-rh-active-6";
+const APP_VERSION = "20260609-supabase-runtime";
 
 if (window.location.protocol === "file:") {
   window.location.replace(`http://127.0.0.1:5180/?r=${APP_VERSION}`);
@@ -907,7 +907,6 @@ function applyRuntimeDataCache(cache) {
   applySimulationHierarchy();
   rebuildRuntimeIndexes();
   updateRuntimeDataSignature();
-  applySimulationPerson(state.simulatedPerson || currentUser.name);
   return true;
 }
 
@@ -1430,6 +1429,16 @@ function employeesManagedBy(leaderName) {
 }
 
 function currentEmployeeRecord() {
+  const profileEmployeeId = state.authProfile?.employee_id || "";
+  if (profileEmployeeId) {
+    const byId = employees.find((employee) => employee.dbId === profileEmployeeId || employee.id === profileEmployeeId);
+    if (byId) return byId;
+  }
+  const currentEmail = normalizeText(currentUser.email || state.authUser?.email || state.authProfile?.email || "");
+  if (currentEmail) {
+    const byEmail = employees.find((employee) => normalizeText(employee.email || "") === currentEmail);
+    if (byEmail) return byEmail;
+  }
   const currentName = normalizeText(currentUser.name);
   return memoValue(`current:${currentName}`, () => (
     employeeIndex.byName.get(currentName) ||
@@ -1437,7 +1446,6 @@ function currentEmployeeRecord() {
       const employeeName = normalizeText(employee.name);
       return currentName && (employeeName.includes(currentName) || currentName.includes(employeeName));
     }) ||
-    employees[0] ||
     null
   ));
 }
@@ -1652,12 +1660,6 @@ function simulationPersonOptions() {
 function shell(content) {
   const [title, subtitle] = titles[state.page];
   const groups = visiblePages();
-  const profileOptions = Object.keys(simulatedProfiles)
-    .map((profile) => `<option value="${profile}" ${currentUser.profile === profile ? "selected" : ""}>${profile}</option>`)
-    .join("");
-  const personOptions = simulationPersonOptions()
-    .map((person) => `<option value="${escapeHtml(person.name)}" ${isSamePerson(person.name, currentUser.name) ? "selected" : ""}>${escapeHtml(person.name)}</option>`)
-    .join("");
   const topbarBrand =
     currentUser.company && currentUser.company !== "Todas"
       ? companyLogo(currentUser.company)
@@ -1690,8 +1692,7 @@ function shell(content) {
         <header class="topbar">
           <div><h1>${title}</h1><p>${subtitle} · ${state.dataStatus}</p></div>
           <div class="actions">
-            <label class="profile-switcher"><span>Perfil</span><select id="profile-switcher" aria-label="Simular perfil">${profileOptions}</select></label>
-            <label class="person-switcher"><span>Pessoa</span><select id="person-switcher" aria-label="Simular colaborador">${personOptions}</select></label>
+            <div class="identity-lock"><span>Usuário</span><strong>${escapeHtml(currentUser.name)}</strong><small>${escapeHtml(currentUser.profile)}</small></div>
             <div class="topbar-brand">${topbarBrand}</div>
             <button class="btn" data-action="refresh">⟳ Atualizar</button>
             <button class="btn ghost" data-action="logout">Sair</button>
@@ -1801,19 +1802,18 @@ async function loadSupabaseData() {
 }
 
 async function loadSupabaseDataFresh() {
-  if (!supabaseClient) {
+    if (!supabaseClient) {
     employees = [];
     requests = [];
     documents = [];
     vacationForecasts = [];
     vacationRows = [];
     registrationCards = [];
-    paystubRecords = [];
-    applySimulationHierarchy();
-    applySimulationPerson(state.simulatedPerson || currentUser.name);
-    state.dataStatus = "Supabase indisponível";
-    renderPage();
-    return;
+      paystubRecords = [];
+      applySimulationHierarchy();
+      state.dataStatus = "Supabase indisponível";
+      renderPage();
+      return;
   }
 
   try {
@@ -1852,7 +1852,6 @@ async function loadSupabaseDataFresh() {
       registrationCards = [];
       paystubRecords = [];
       applySimulationHierarchy();
-      applySimulationPerson(state.simulatedPerson || currentUser.name);
       state.dataStatus = `Supabase conectado, aguardando ajuste de base: ${errors[0].message}`;
       renderPage();
       return;
@@ -1934,7 +1933,6 @@ async function loadSupabaseDataFresh() {
     applySimulationHierarchy();
     rebuildRuntimeIndexes();
     updateRuntimeDataSignature();
-    applySimulationPerson(state.simulatedPerson || currentUser.name);
     state.dataStatus = `Supabase conectado: ${employees.length} colaboradores`;
     saveRuntimeDataCache();
     if (previousSignature && previousSignature === runtimeDataSignature && wasAlreadyConnected && lastRenderedHtml) {
@@ -1950,7 +1948,6 @@ async function loadSupabaseDataFresh() {
     registrationCards = [];
     paystubRecords = [];
     applySimulationHierarchy();
-    applySimulationPerson(state.simulatedPerson || currentUser.name);
     state.dataStatus = `Erro de conexão: ${error.message}`;
     renderPage();
   }
@@ -5516,20 +5513,6 @@ function bind() {
   if (appRoot && !appRoot.dataset.clickDelegated) {
     appRoot.addEventListener("click", (event) => handleDelegatedAppClick(event, appRoot), true);
     appRoot.dataset.clickDelegated = "true";
-  }
-  const profileSwitcher = document.querySelector("#profile-switcher");
-  if (profileSwitcher) {
-    profileSwitcher.addEventListener("change", (event) => {
-      applyProfile(event.target.value);
-      renderPage();
-    });
-  }
-  const personSwitcher = document.querySelector("#person-switcher");
-  if (personSwitcher) {
-    personSwitcher.addEventListener("change", (event) => {
-      applySimulationPerson(event.target.value);
-      renderPage();
-    });
   }
   document.querySelectorAll("[data-master-add]").forEach((form) => {
     form.addEventListener("submit", (event) => {
