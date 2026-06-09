@@ -40,6 +40,44 @@ button {
   cursor: pointer;
 }
 
+.test-user-switcher {
+  position: fixed;
+  inset: 0 0 auto 0;
+  z-index: 9999;
+  min-height: 36px;
+  background: #1a3a5c;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 4px 10px;
+  box-shadow: 0 2px 8px rgba(12, 24, 36, 0.18);
+}
+
+.test-user-switcher button {
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+  min-height: 26px;
+  padding: 6px 10px;
+}
+
+.test-user-switcher button:hover,
+.test-user-switcher button:focus-visible {
+  background: rgba(255, 255, 255, 0.18);
+  outline: none;
+}
+
+.test-user-switcher button.active {
+  background: #e87722;
+  border-color: #e87722;
+  color: #ffffff;
+}
+
 .shell {
   min-height: 100vh;
   display: grid;

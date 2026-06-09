@@ -1099,9 +1099,73 @@ function appProfileFromRoleCode(roleCode) {
   const normalized = normalizeText(roleCode);
   if (["RH", "HR", "RH_ADMIN", "GESTOR_RH", "ADMIN"].includes(normalized)) return "RH";
   if (["DIRETORIA", "DIRETOR", "DIRECTOR", "EXECUTIVE"].includes(normalized)) return "Diretoria";
-  if (["GESTOR", "GERENTE", "MANAGER"].includes(normalized)) return "Gerente";
+  if (["GESTOR", "GERENTE", "MANAGER", "GESTOR_FINANCEIRO"].includes(normalized)) return "Gerente";
   if (["SUPERVISOR", "LIDER", "LEADER"].includes(normalized)) return "Supervisor";
   return "Colaborador";
+}
+
+const testSwitcherUsers = [
+  { label: "👑 Diretor", profile: "Diretoria", email: "teste.diretor@teste.prodelar" },
+  { label: "👩‍💼 RH", profile: "RH", email: "teste.rh@teste.prodelar" },
+  { label: "💰 Financeiro", roleCode: "gestor_financeiro", email: "teste.financeiro@teste.prodelar" },
+  { label: "🧑‍💼 Gerente", profile: "Gerente", email: "teste.gerente@teste.prodelar" },
+  { label: "👷 Supervisor", profile: "Supervisor", email: "teste.supervisor@teste.prodelar" },
+  { label: "👤 Colaborador", profile: "Colaborador", email: "teste.colaborador@teste.prodelar" },
+];
+
+function removeTestSwitcher() {
+  document.getElementById("test-user-switcher")?.remove();
+  document.body.style.paddingTop = "";
+}
+
+function currentTestSwitcherEmail(user = currentUser) {
+  return String(user?.email || state.authUser?.email || state.authProfile?.email || "").trim().toLowerCase();
+}
+
+function isTestSwitcherUser(user = currentUser) {
+  return currentTestSwitcherEmail(user).includes("@teste.prodelar");
+}
+
+function renderTestSwitcher(user = currentUser) {
+  if (!isTestSwitcherUser(user) || !supabaseClient?.auth) {
+    removeTestSwitcher();
+    return;
+  }
+
+  const currentEmail = currentTestSwitcherEmail(user);
+  let bar = document.getElementById("test-user-switcher");
+  if (!bar) {
+    bar = document.createElement("div");
+    bar.id = "test-user-switcher";
+    document.body.prepend(bar);
+    bar.addEventListener("click", async (event) => {
+      const button = event.target.closest("[data-test-switch-email]");
+      if (!button || button.disabled) return;
+      const email = button.dataset.testSwitchEmail;
+      button.disabled = true;
+      button.textContent = "Trocando...";
+      const { error } = await supabaseClient.auth.signInWithPassword({
+        email,
+        password: "Teste@2024",
+      });
+      if (error) {
+        button.disabled = false;
+        button.textContent = "Erro";
+        console.error("Erro ao trocar usuário de teste", error);
+        return;
+      }
+      window.location.reload();
+    });
+  }
+
+  bar.className = "test-user-switcher";
+  bar.innerHTML = testSwitcherUsers
+    .map((item) => {
+      const active = item.email.toLowerCase() === currentEmail;
+      return `<button type="button" class="${active ? "active" : ""}" data-test-switch-email="${escapeHtml(item.email)}">${active ? "✓ " : ""}${escapeHtml(item.label)}</button>`;
+    })
+    .join("");
+  document.body.style.paddingTop = "36px";
 }
 
 function applyAuthenticatedProfile({ user, profile, employee } = {}) {
@@ -1135,6 +1199,7 @@ function applyAuthenticatedProfile({ user, profile, employee } = {}) {
   } else {
     state.company = "Todas";
   }
+  renderTestSwitcher(currentUser);
 }
 
 async function loadAuthProfile(session) {
@@ -5334,17 +5399,21 @@ function renderPage() {
   ensureRuntimeIndexes();
   renderMemo = {};
   if (!state.authChecked) {
+    removeTestSwitcher();
     commitAppHtml(authPage(), bindAuth);
     return;
   }
   if (!state.authSession) {
+    removeTestSwitcher();
     commitAppHtml(authPage(), bindAuth);
     return;
   }
   if (shouldForcePasswordChange()) {
+    renderTestSwitcher(currentUser);
     commitAppHtml(passwordChangePage(), bindAuth);
     return;
   }
+  renderTestSwitcher(currentUser);
   if (!canAccessPage(state.page)) {
     state.page = currentUser.homePage;
     updatePageUrl(state.page, true);
