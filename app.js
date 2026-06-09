@@ -596,6 +596,7 @@ let vacationRows = sampleVacationRows;
 let vacationForecasts = [];
 let registrationCards = [];
 let paystubRecords = [];
+let employeeTimelineEvents = [];
 let vacationSearchDebounce = null;
 let lightweightRenderTimer = null;
 let renderMemo = {};
@@ -904,6 +905,7 @@ function applyRuntimeDataCache(cache) {
   vacationRows = Array.isArray(cache.vacationRows) ? cache.vacationRows : [];
   registrationCards = Array.isArray(cache.registrationCards) ? cache.registrationCards : [];
   paystubRecords = Array.isArray(cache.paystubRecords) ? cache.paystubRecords : [];
+  employeeTimelineEvents = Array.isArray(cache.employeeTimelineEvents) ? cache.employeeTimelineEvents : [];
   applySimulationHierarchy();
   rebuildRuntimeIndexes();
   updateRuntimeDataSignature();
@@ -931,6 +933,7 @@ function saveRuntimeDataCache() {
         vacationRows,
         registrationCards,
         paystubRecords,
+        employeeTimelineEvents,
       }),
     );
   } catch {
@@ -950,6 +953,7 @@ function clearSampleDataForSupabaseBoot() {
   vacationRows = [];
   registrationCards = [];
   paystubRecords = [];
+  employeeTimelineEvents = [];
   markRuntimeIndexesDirty();
   updateRuntimeDataSignature();
 }
@@ -960,13 +964,15 @@ function runtimeDataPayloadSignature(payload = {}) {
   const documentRows = payload.documents || documents;
   const vacationRowsForSignature = payload.vacationForecasts || vacationForecasts;
   const paystubRows = payload.paystubRecords || paystubRecords;
+  const timelineRows = payload.employeeTimelineEvents || employeeTimelineEvents;
   const tailOf = (rows) => rows[rows.length - 1] || {};
-  const counts = [employeeRows.length, requestRows.length, documentRows.length, vacationRowsForSignature.length, paystubRows.length];
+  const counts = [employeeRows.length, requestRows.length, documentRows.length, vacationRowsForSignature.length, paystubRows.length, timelineRows.length];
   const markers = [
     tailOf(employeeRows).id || "",
     requestRows[0]?.protocol || requestRows[0]?.id || "",
     vacationRowsForSignature[0]?.id || vacationRowsForSignature[0]?.employee_name || "",
     paystubRows[0]?.id || paystubRows[0]?.file_name || "",
+    timelineRows[0]?.id || timelineRows[0]?.title || "",
   ];
   return `${counts.join(":")}|${markers.map(normalizeText).join(":")}`;
 }
@@ -1802,24 +1808,25 @@ async function loadSupabaseData() {
 }
 
 async function loadSupabaseDataFresh() {
-    if (!supabaseClient) {
+  if (!supabaseClient) {
     employees = [];
     requests = [];
     documents = [];
     vacationForecasts = [];
     vacationRows = [];
     registrationCards = [];
-      paystubRecords = [];
-      applySimulationHierarchy();
-      state.dataStatus = "Supabase indisponível";
-      renderPage();
-      return;
+    paystubRecords = [];
+    employeeTimelineEvents = [];
+    applySimulationHierarchy();
+    state.dataStatus = "Supabase indisponível";
+    renderPage();
+    return;
   }
 
   try {
     const previousSignature = runtimeDataSignature;
     const wasAlreadyConnected = state.dataStatus.startsWith("Supabase conectado");
-    const [employeeResult, requestResult, vacationResult, documentResult, employeeDocumentResult] = await Promise.all([
+    const [employeeResult, requestResult, vacationResult, documentResult, employeeDocumentResult, timelineResult] = await Promise.all([
       supabaseClient.from("hr_employee_directory").select("*").order("full_name"),
       supabaseClient
         .from("hr_requests")
@@ -1840,9 +1847,14 @@ async function loadSupabaseDataFresh() {
         )
         .eq("document_type.code", "paystub")
         .order("competence_month", { ascending: false }),
+      supabaseClient
+        .from("hr_employee_timeline")
+        .select("id,employee_id,event_type,module_name,title,description,status,metadata,created_at,related_table,related_record_id")
+        .order("created_at", { ascending: false })
+        .limit(500),
     ]);
 
-    const errors = [employeeResult.error, requestResult.error, vacationResult.error, documentResult.error, employeeDocumentResult.error].filter(Boolean);
+    const errors = [employeeResult.error, requestResult.error, vacationResult.error, documentResult.error, employeeDocumentResult.error, timelineResult.error].filter(Boolean);
     if (errors.length) {
       employees = [];
       requests = [];
@@ -1851,6 +1863,7 @@ async function loadSupabaseDataFresh() {
       vacationRows = [];
       registrationCards = [];
       paystubRecords = [];
+      employeeTimelineEvents = [];
       applySimulationHierarchy();
       state.dataStatus = `Supabase conectado, aguardando ajuste de base: ${errors[0].message}`;
       renderPage();
@@ -1929,6 +1942,19 @@ async function loadSupabaseDataFresh() {
         file_name: row.original_file_name || "",
         file_url: row.storage_path ? supabaseStoragePublicUrl(row.storage_bucket, row.storage_path) : "",
       }));
+    employeeTimelineEvents = (timelineResult.data || []).map((row) => ({
+      id: row.id,
+      employee_id: row.employee_id,
+      event_type: row.event_type,
+      module_name: row.module_name,
+      title: row.title,
+      description: row.description || "",
+      status: row.status || "",
+      metadata: row.metadata || {},
+      created_at: row.created_at,
+      related_table: row.related_table || "",
+      related_record_id: row.related_record_id || "",
+    }));
     state.vacationMessage = vacationForecasts.length ? "" : "Nenhuma previsão de férias cadastrada no Supabase.";
     applySimulationHierarchy();
     rebuildRuntimeIndexes();
@@ -1947,6 +1973,7 @@ async function loadSupabaseDataFresh() {
     vacationRows = [];
     registrationCards = [];
     paystubRecords = [];
+    employeeTimelineEvents = [];
     applySimulationHierarchy();
     state.dataStatus = `Erro de conexão: ${error.message}`;
     renderPage();
@@ -2478,6 +2505,13 @@ function employeeAccounting(employee) {
 }
 
 function employeeHistoryRows(employee) {
+  const realTimelineRows = employeeTimelineEvents
+    .filter((event) => event.employee_id && (event.employee_id === employee.dbId || event.employee_id === employee.id))
+    .map((event) => ({
+      date: event.created_at ? formatDateTime(event.created_at) : "Sem data",
+      title: event.title || event.event_type || "Evento",
+      detail: [event.module_name, event.description, event.status].filter(Boolean).join(" · ") || "Evento registrado no Supabase",
+    }));
   const rows = [
     {
       date: employee.admission || "Sem data",
@@ -2507,7 +2541,7 @@ function employeeHistoryRows(employee) {
       title: event.moduleTitle || "Controle RH",
       detail: event.summary || "Evento lançado em Controles RH",
     }));
-  return [...peopleEvents, ...rows];
+  return [...realTimelineRows, ...peopleEvents, ...rows];
 }
 
 function employeeHistory(employee) {
@@ -3421,6 +3455,20 @@ function handlePointAdjustmentSubmit(event) {
     createdAt: new Date().toISOString(),
   };
   savePointAdjustmentStore([record, ...pointAdjustmentStore()].slice(0, 100));
+  void recordEmployeeTimeline({
+    eventType: "ponto",
+    moduleName: "ponto",
+    title: "Ajuste de ponto solicitado",
+    description: `${formatDate(pointDate)} · ${record.reason}`,
+    status: record.status,
+    metadata: {
+      point_adjustment_id: record.id,
+      entry: record.entry,
+      interval_out: record.intervalOut,
+      interval_return: record.intervalReturn,
+      day_out: record.dayOut,
+    },
+  });
   state.pointAdjustmentOpen = false;
   state.pointMessage = "Solicitação de ajuste de ponto enviada para a liderança.";
   renderPage();
@@ -4934,6 +4982,52 @@ function renderPage() {
   }
 }
 
+function timelineEmployeeId(employee = null) {
+  if (employee?.dbId) return employee.dbId;
+  if (employee?.id && /^[0-9a-f-]{36}$/i.test(employee.id)) return employee.id;
+  return currentEmployeeRecord()?.dbId || "";
+}
+
+async function recordEmployeeTimeline({
+  employee = null,
+  employeeId = "",
+  eventType,
+  moduleName,
+  title,
+  description = "",
+  relatedTable = "",
+  relatedRecordId = null,
+  status = "",
+  metadata = {},
+}) {
+  if (!supabaseClient || !eventType || !moduleName || !title) return { ok: false, message: "timeline indisponível" };
+  const targetEmployeeId = employeeId || timelineEmployeeId(employee);
+  if (!targetEmployeeId) return { ok: false, message: "colaborador sem vínculo para timeline" };
+  try {
+    const { error } = await supabaseClient.from("hr_employee_timeline").insert({
+      employee_id: targetEmployeeId,
+      event_type: eventType,
+      module_name: moduleName,
+      title,
+      description,
+      related_table: relatedTable || null,
+      related_record_id: relatedRecordId || null,
+      status: status || null,
+      metadata: {
+        ...metadata,
+        actor_name: currentUser.name,
+        actor_profile: currentUser.profile,
+      },
+      created_by: state.authProfile?.id || null,
+    });
+    if (error) return { ok: false, message: error.message };
+    return { ok: true };
+  } catch (error) {
+    console.warn("Timeline não gravada", error);
+    return { ok: false, message: error.message };
+  }
+}
+
 function saveVacationEdit(key, patch) {
   const index = vacationForecasts.findIndex((row) => vacationKey(row) === key);
   if (index < 0) return;
@@ -4980,6 +5074,15 @@ function submitVacationForReview(key) {
   vacationForecasts = vacationForecasts.map((item) => (vacationKey(item) === key ? { ...item, ...saved[key] } : item));
   markRuntimeIndexesDirty();
   state.vacationMessage = `Programação de ${row.employee_name} submetida para avaliação.`;
+  void recordEmployeeTimeline({
+    employee: employees.find((employee) => isSamePerson(employee.name, row.employee_name)),
+    eventType: "ferias",
+    moduleName: "ferias",
+    title: "Programação de férias submetida",
+    description: `${row.planned_start} a ${row.planned_end}`,
+    status: "waiting_review",
+    metadata: { vacation_key: key, company: row.company_key || row.source_company || row.company || "" },
+  });
   renderPage();
 }
 
@@ -5017,6 +5120,17 @@ async function persistRequestWorkflowState(request, patch) {
     notes: `${latestAction} por ${currentUser.name}. Próximo: ${patch.owner}.`,
   });
   if (history.error) return { ok: true, message: `movimento gravado; histórico não confirmou: ${history.error.message}` };
+  await recordEmployeeTimeline({
+    employee: employees.find((employee) => isSamePerson(employee.name, request.employee)),
+    eventType: "solicitacao",
+    moduleName: "solicitacoes",
+    title: `${request.protocol} - ${latestAction}`,
+    description: `${request.status} → ${patch.status}. Responsável: ${patch.owner}.`,
+    relatedTable: "hr_requests",
+    relatedRecordId: request.dbId,
+    status: patch.status,
+    metadata: { request_type: request.type, next: patch.next },
+  });
   return { ok: true, message: "movimento gravado no Supabase" };
 }
 
@@ -5190,6 +5304,15 @@ function submitAllVacationChanges() {
     };
     localStorage.setItem("rhVacationEdits", JSON.stringify(saved));
     vacationForecasts = vacationForecasts.map((item) => (vacationKey(item) === key ? { ...item, ...saved[key] } : item));
+    void recordEmployeeTimeline({
+      employee: employees.find((employee) => isSamePerson(employee.name, row.employee_name)),
+      eventType: "ferias",
+      moduleName: "ferias",
+      title: "Programação de férias enviada em lote",
+      description: `${row.planned_start} a ${row.planned_end}`,
+      status: "waiting_review",
+      metadata: { vacation_key: key, company: row.company_key || row.source_company || row.company || "" },
+    });
   });
   markRuntimeIndexesDirty();
   state.vacationMessage = keys.length ? `${keys.length} alteração(ões) de férias enviadas para aprovação.` : "Nenhuma alteração pendente para enviar.";
@@ -5755,6 +5878,16 @@ async function handleEmployeeSubmit(event) {
   const persisted = await tryPersistEmployee(form, localCode);
   if (persisted.ok) {
     state.formMessage = `Colaborador gravado no Supabase com código ${persisted.employeeCode}.`;
+    void recordEmployeeTimeline({
+      employeeId: persisted.employeeId,
+      eventType: "admissao",
+      moduleName: "colaboradores",
+      title: "Cadastro inicial criado",
+      description: `Colaborador criado pelo formulário do RH com código ${persisted.employeeCode}.`,
+      relatedTable: "hr_employees",
+      relatedRecordId: persisted.employeeId,
+      status: "active",
+    });
     await loadSupabaseData();
     const savedEmployee = employees.find((item) => item.id === persisted.employeeCode);
     state.selectedEmployeeId = savedEmployee?.id || persisted.employeeCode;
@@ -5895,6 +6028,16 @@ async function saveEmployeeStatus(employeeId, status) {
     return;
   }
 
+  await recordEmployeeTimeline({
+    employee,
+    eventType: "colaborador",
+    moduleName: "colaboradores",
+    title: "Status do colaborador atualizado",
+    description: `${oldStatus} → ${status}`,
+    relatedTable: "hr_employees",
+    relatedRecordId: employee.dbId,
+    status,
+  });
   await loadSupabaseData();
 }
 
@@ -5938,6 +6081,21 @@ async function saveEmployeeDetails(employeeId) {
       .eq("id", employee.dbId);
 
     if (error) throw error;
+    await recordEmployeeTimeline({
+      employee: nextEmployee,
+      eventType: "colaborador",
+      moduleName: "colaboradores",
+      title: "Ficha funcional atualizada",
+      description: "Dados cadastrais, empresa, setor, cargo ou liderança foram revisados.",
+      relatedTable: "hr_employees",
+      relatedRecordId: employee.dbId,
+      status: nextEmployee.status,
+      metadata: {
+        previous_name: employee.name,
+        previous_manager: employee.manager,
+        manager: nextEmployee.manager,
+      },
+    });
     await loadSupabaseData();
   } catch (error) {
     state.formMessage = `Não foi possível gravar a alteração no Supabase: ${error.message}`;
@@ -6002,6 +6160,22 @@ async function tryPersistRequest(form, fallbackProtocol, requestDraft = null) {
       request_id: data.id,
       new_status: requestDbStatus(requestDraft?.status || "Aberto"),
       notes: `Solicitação aberta pelo formulário do MVP RH. Dono inicial: ${requestDraft?.owner || form.get("owner") || "Supervisor"}.`,
+    });
+
+    await recordEmployeeTimeline({
+      employee: selectedEmployee || currentEmployeeRecord(),
+      eventType: "solicitacao",
+      moduleName: "solicitacoes",
+      title: `${data.protocol_number} - Solicitação criada`,
+      description: requestDraft?.description || String(form.get("description") || ""),
+      relatedTable: "hr_requests",
+      relatedRecordId: data.id,
+      status: requestDraft?.status || "Aberto",
+      metadata: {
+        request_type: String(form.get("type") || ""),
+        owner: requestDraft?.owner || form.get("owner") || "",
+        next: requestDraft?.next || "Gerência",
+      },
     });
 
     return { ok: true, id: data.id, protocol: data.protocol_number };
