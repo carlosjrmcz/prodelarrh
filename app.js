@@ -574,6 +574,11 @@ const state = {
   formMessage: "",
   peopleControlActiveModule: "aso",
   peopleControlMessage: "",
+  announcementQuery: "",
+  announcementEmployeeId: "",
+  announcementSubject: "",
+  announcementMessage: "",
+  announcementResult: "",
   rhTaskMessage: "",
   rhTaskStatusFilter: "open",
   rhTaskTypeFilter: "all",
@@ -780,6 +785,7 @@ const pages = [
       ["rhRoutines", "☑", "Rotinas / Importações RH", ["RH", "Diretoria"]],
       ["accounting", "⇪", "Pacote mensal", ["RH", "Diretoria"]],
       ["emails", "✉", "E-mails", ["RH", "Diretoria"]],
+      ["announcement", "+", "Novo Comunicado", ["RH", "Diretoria"]],
       ["masterData", "◎", "Empresas e setores", ["RH", "Diretoria"]],
       ["hierarchy", "⇄", "Hierarquia", ["RH", "Diretoria"]],
       ["employees", "☷", "Colaboradores", ["RH", "Diretoria"]],
@@ -810,6 +816,7 @@ const titles = {
   accounting: ["Pacote mensal", "Envio rastreável para contabilidade/Mastermaq por competência."],
   paystubs: ["Contracheques", "Processamento do PDF único em arquivos individuais por colaborador."],
   emails: ["Central de e-mails", "Fila transacional para notificações, aprovações, comunicados e portal."],
+  announcement: ["Novo Comunicado", "Comunicado individual avulso para colaborador, com preview e fila segura de e-mail."],
 };
 
 function statusPill(value) {
@@ -1077,8 +1084,8 @@ function findEmployeeByCpf(cpf) {
 
 function appProfileFromRoleCode(roleCode) {
   const normalized = normalizeText(roleCode);
-  if (["RH", "HR", "RH_ADMIN", "ADMIN"].includes(normalized)) return "RH";
-  if (["DIRETORIA", "DIRECTOR", "EXECUTIVE"].includes(normalized)) return "Diretoria";
+  if (["RH", "HR", "RH_ADMIN", "GESTOR_RH", "ADMIN"].includes(normalized)) return "RH";
+  if (["DIRETORIA", "DIRETOR", "DIRECTOR", "EXECUTIVE"].includes(normalized)) return "Diretoria";
   if (["GESTOR", "GERENTE", "MANAGER"].includes(normalized)) return "Gerente";
   if (["SUPERVISOR", "LIDER", "LEADER"].includes(normalized)) return "Supervisor";
   return "Colaborador";
@@ -1756,6 +1763,10 @@ function employeeStatusToDb(status) {
   return values[status] || "active";
 }
 
+function employeeStatus(employee) {
+  return employee?.status || "Ativo";
+}
+
 function formatDate(value) {
   if (!value) return "Sem data";
   const parts = String(value).slice(0, 10).split("-");
@@ -1910,6 +1921,7 @@ async function loadSupabaseDataFresh() {
       admission: formatDate(row.admission_date),
       cpf: row.cpf || row.document_number || row.tax_id || row.raw_import?.cpf || "",
       birthDate: row.birth_date || row.date_of_birth || row.raw_import?.birth_date || "",
+      email: row.email || row.corporate_email || row.personal_email || "",
       vacation: "Consultar",
       timeBank: "Consultar",
     }));
@@ -5003,6 +5015,80 @@ function emailsPage() {
     </div>`;
 }
 
+function canSendAnnouncements() {
+  return ["RH", "Diretoria"].includes(currentUser.profile);
+}
+
+function announcementEmployeeOptions() {
+  const query = normalizeText(state.announcementQuery);
+  return employees
+    .filter((employee) => employeeStatus(employee) === "Ativo")
+    .filter((employee) => !query || [employee.name, employee.company, employee.department, employee.role, employee.email].some((value) => normalizeText(value).includes(query)))
+    .sort((a, b) => a.name.localeCompare(b.name, "pt-BR"))
+    .slice(0, 12);
+}
+
+function selectedAnnouncementEmployee() {
+  return employees.find((employee) => employee.id === state.announcementEmployeeId || employee.dbId === state.announcementEmployeeId) || null;
+}
+
+function emailPayloadHtml(value) {
+  return escapeHtml(value).replace(/\n/g, "<br>");
+}
+
+function announcementPage() {
+  const allowed = canSendAnnouncements();
+  const options = announcementEmployeeOptions();
+  const selected = selectedAnnouncementEmployee();
+  const canPreview = selected && state.announcementSubject.trim() && state.announcementMessage.trim();
+  return `
+    ${state.announcementResult ? `<div class="notice form-notice"><strong>Retorno</strong><p>${escapeHtml(state.announcementResult)}</p></div>` : ""}
+    <div class="grid two">
+      <div class="card pad">
+        <div class="section-title">
+          <div><h2>Novo comunicado individual</h2><p>Escolha um colaborador ativo, revise a mensagem e enfileire o envio.</p></div>
+          ${statusPill(allowed ? "Permitido" : "Sem acesso")}
+        </div>
+        <form class="form-grid" id="announcement-form">
+          <label class="form-field full"><span>Buscar colaborador</span><input id="announcement-search" value="${escapeHtml(state.announcementQuery)}" placeholder="Digite nome, setor, cargo ou e-mail" autocomplete="off" ${allowed ? "" : "disabled"} /></label>
+          <div class="full announcement-results">
+            ${
+              options.length
+                ? options.map((employee) => `<button type="button" class="announcement-person ${selected?.id === employee.id || selected?.dbId === employee.dbId ? "active" : ""}" data-announcement-employee="${employee.dbId || employee.id}">
+                    <strong>${escapeHtml(employee.name)}</strong>
+                    <span>${escapeHtml(employee.company)} · ${escapeHtml(employee.department || "Sem setor")} · ${escapeHtml(employee.email || "sem e-mail cadastrado")}</span>
+                  </button>`).join("")
+                : `<div class="empty small-empty">Nenhum colaborador encontrado para a busca.</div>`
+            }
+          </div>
+          <label class="form-field full"><span>Assunto</span><input id="announcement-subject" name="subject" value="${escapeHtml(state.announcementSubject)}" required placeholder="Ex.: Atualização importante do RH" ${allowed ? "" : "disabled"} /></label>
+          <label class="form-field full"><span>Mensagem</span><textarea id="announcement-message" name="message" rows="8" required placeholder="Escreva a mensagem que será enviada ao colaborador." ${allowed ? "" : "disabled"}>${escapeHtml(state.announcementMessage)}</textarea></label>
+          <div class="form-actions full">
+            <button class="btn primary" type="submit" ${allowed && canPreview ? "" : "disabled"}>Enviar para fila</button>
+          </div>
+        </form>
+      </div>
+      <div class="card pad announcement-preview">
+        <div class="section-title"><div><h2>Preview</h2><p>Prévia antes de criar o evento na fila.</p></div>${statusPill(canPreview ? "Pronto" : "Aguardando dados")}</div>
+        ${
+          canPreview
+            ? `<div class="email-preview-card">
+                <div class="preview-header"><span>Recursos Humanos · Grupo Prodelar</span><strong>${escapeHtml(state.announcementSubject)}</strong></div>
+                <div class="preview-body">
+                  <p>Olá, <strong>${escapeHtml(selected.name)}</strong>.</p>
+                  <p>${emailPayloadHtml(state.announcementMessage)}</p>
+                </div>
+                <div class="preview-meta">
+                  <span>Para: ${escapeHtml(selected.email || "sem e-mail cadastrado")}</span>
+                  <span>Template: comunicado_avulso_individual</span>
+                </div>
+              </div>`
+            : `<div class="empty">Selecione um colaborador e preencha assunto e mensagem para visualizar.</div>`
+        }
+      </div>
+    </div>`;
+}
+
 function timeline() {
   return `
     <div class="timeline">
@@ -5097,6 +5183,7 @@ const pageRenderers = {
   hierarchy: hierarchyPage,
   paystubs: paystubsPage,
   emails: emailsPage,
+  announcement: announcementPage,
 };
 
 function renderPage() {
@@ -5513,6 +5600,7 @@ function handleDelegatedAppClick(event, appRoot) {
       "[data-people-control-save]",
       "[data-people-control-view]",
       "[data-people-control-inactivate]",
+      "[data-announcement-employee]",
       "[data-routine-mark]",
       "[data-routine-execute]",
       "[data-temporary-routine-close]",
@@ -5646,6 +5734,10 @@ function handleDelegatedAppClick(event, appRoot) {
     viewPeopleControlEvent(dataset.peopleControlView);
   } else if (dataset.peopleControlInactivate !== undefined) {
     inactivatePeopleControlEvent(dataset.peopleControlInactivate);
+  } else if (dataset.announcementEmployee !== undefined) {
+    state.announcementEmployeeId = dataset.announcementEmployee || "";
+    state.announcementResult = "";
+    renderPage();
   } else if (dataset.temporaryRoutineClose !== undefined) {
     const store = temporaryRoutineClosedStore();
     store[dataset.temporaryRoutineClose] = {
@@ -6024,6 +6116,35 @@ function bind() {
   if (requestForm) {
     requestForm.addEventListener("submit", handleRequestSubmit);
   }
+  const announcementForm = document.querySelector("#announcement-form");
+  if (announcementForm) {
+    announcementForm.addEventListener("submit", handleAnnouncementSubmit);
+  }
+  const announcementSearch = document.querySelector("#announcement-search");
+  if (announcementSearch) {
+    announcementSearch.addEventListener("input", (event) => {
+      state.announcementQuery = event.target.value;
+      state.announcementEmployeeId = "";
+      state.announcementResult = "";
+      scheduleRenderWithFocus("#announcement-search");
+    });
+  }
+  const announcementSubject = document.querySelector("#announcement-subject");
+  if (announcementSubject) {
+    announcementSubject.addEventListener("input", (event) => {
+      state.announcementSubject = event.target.value;
+      state.announcementResult = "";
+      scheduleRenderWithFocus("#announcement-subject");
+    });
+  }
+  const announcementMessage = document.querySelector("#announcement-message");
+  if (announcementMessage) {
+    announcementMessage.addEventListener("input", (event) => {
+      state.announcementMessage = event.target.value;
+      state.announcementResult = "";
+      scheduleRenderWithFocus("#announcement-message");
+    });
+  }
   const pointAdjustment = document.querySelector("#point-adjustment-form");
   if (pointAdjustment) {
     pointAdjustment.addEventListener("submit", handlePointAdjustmentSubmit);
@@ -6094,6 +6215,74 @@ async function handleEmployeeSubmit(event) {
     `Cadastro não foi gravado. O Supabase bloqueou a operação: ${persisted.message}`;
   state.page = "employeeForm";
   state.detailTab = "ficha";
+  renderPage();
+}
+
+async function handleAnnouncementSubmit(event) {
+  event.preventDefault();
+  if (!canSendAnnouncements()) {
+    state.announcementResult = "Seu perfil não tem permissão para enviar comunicados avulsos.";
+    renderPage();
+    return;
+  }
+  const employee = selectedAnnouncementEmployee();
+  const subject = state.announcementSubject.trim();
+  const message = state.announcementMessage.trim();
+  if (!employee) {
+    state.announcementResult = "Selecione um colaborador antes de enviar.";
+    renderPage();
+    return;
+  }
+  if (!employee.email) {
+    state.announcementResult = `${employee.name} não tem e-mail cadastrado. Atualize o cadastro antes de enviar.`;
+    renderPage();
+    return;
+  }
+  if (!subject || !message) {
+    state.announcementResult = "Preencha assunto e mensagem antes de enviar.";
+    renderPage();
+    return;
+  }
+  if (!supabaseClient || !window.createEmailQueue) {
+    state.announcementResult = "Fila de e-mail indisponível no momento.";
+    renderPage();
+    return;
+  }
+
+  const queue = window.createEmailQueue(supabaseClient);
+  const result = await queue.queueEmail({
+    moduleName: "comunicados",
+    eventType: "comunicado_avulso_individual",
+    employeeId: employee.dbId || employee.id,
+    employeeName: employee.name,
+    recipientEmail: employee.email,
+    recipientName: employee.name,
+    recipientType: "colaborador",
+    subject,
+    templateKey: "comunicado_avulso_individual",
+    status: "pending",
+    createdBy: state.authProfile?.id || currentUser.authUserId || currentUser.name,
+    payload: {
+      colaborador_nome: employee.name,
+      empresa: employee.company || "",
+      departamento: employee.department || "",
+      assunto: subject,
+      mensagem: message,
+      mensagem_html: emailPayloadHtml(message),
+      remetente_nome: currentUser.name,
+      link: window.location.origin,
+    },
+  });
+
+  if (!result.ok) {
+    state.announcementResult = `Não foi possível enfileirar o comunicado: ${result.message}`;
+    renderPage();
+    return;
+  }
+
+  state.announcementResult = `Comunicado enfileirado para ${employee.name}. Evento ${result.id} com status ${result.status}.`;
+  state.announcementSubject = "";
+  state.announcementMessage = "";
   renderPage();
 }
 
