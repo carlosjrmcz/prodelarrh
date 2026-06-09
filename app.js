@@ -1142,6 +1142,7 @@ async function loadAuthProfile(session) {
           department: employeeRow.department_name || "Sem setor",
           role: employeeRow.position_name || "",
           manager: employeeRow.manager_name || employeeRow.supervisor_name || "Sem líder",
+          managerEmployeeId: employeeRow.manager_employee_id || "",
           status: mapEmployeeStatus(employeeRow.status),
           admission: formatDate(employeeRow.admission_date),
           cpf: employeeRow.cpf || "",
@@ -1904,6 +1905,7 @@ async function loadSupabaseDataFresh() {
       department: row.department_name || "Sem setor",
       role: row.position_name || "Sem cargo",
       manager: row.manager_name || "Sem líder",
+      managerEmployeeId: row.manager_employee_id || "",
       status: mapEmployeeStatus(row.status),
       admission: formatDate(row.admission_date),
       cpf: row.cpf || row.document_number || row.tax_id || row.raw_import?.cpf || "",
@@ -2362,7 +2364,7 @@ function employeesPage() {
 }
 
 function employeeDetailPage() {
-  const employee = employees.find((item) => item.id === state.selectedEmployeeId) || employees[0];
+  const employee = employees.find((item) => item.id === state.selectedEmployeeId || item.dbId === state.selectedEmployeeId) || employees[0];
   if (!employee) {
     return `<div class="empty">Nenhum colaborador carregado ainda.</div>`;
   }
@@ -4389,17 +4391,26 @@ function renameMasterDataItem(company, type, oldItem, newItem) {
   state.masterEditKey = "";
 }
 
+function employeeReportsTo(employee, leader) {
+  if (!employee || !leader) return false;
+  if (employee.managerEmployeeId && leader.dbId) return employee.managerEmployeeId === leader.dbId;
+  return isLeaderNameMatch(employee.manager, leader.name);
+}
+
 function hierarchyPage() {
   const activeCompany = state.company || "Todas";
   const activeEmployees = employees.filter((employee) => !["Desligado", "Inativo"].includes(employee.status));
   const scopedEmployees = activeEmployees.filter((employee) => matchesCompanyFilter(employee.company, activeCompany));
   const hierarchySearch = normalizeText(state.hierarchyQuery);
-  const leaderNames = [...new Set(scopedEmployees.map((employee) => employee.manager).filter((manager) => manager && !["Sem líder", "Consultar ficha", "Conselho/Diretoria"].includes(manager)))].sort((a, b) => a.localeCompare(b, "pt-BR"));
-  const leaders = leaderNames.map((leaderName) => {
-    const leaderRecord = employees.find((employee) => isSamePerson(employee.name, leaderName));
-    const directReports = scopedEmployees.filter((employee) => isLeaderNameMatch(employee.manager, leaderName));
+  const leaderRecords = activeEmployees
+    .filter((candidate) => candidate.dbId && scopedEmployees.some((employee) => employeeReportsTo(employee, candidate)))
+    .sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
+  const leaders = leaderRecords.map((leaderRecord) => {
+    const directReports = scopedEmployees.filter((employee) => employeeReportsTo(employee, leaderRecord));
     return {
-      name: leaderName,
+      id: leaderRecord.id,
+      dbId: leaderRecord.dbId,
+      name: leaderRecord.name,
       company: leaderRecord?.company || activeCompany,
       role: leaderRecord?.role || "Líder",
       manager: leaderRecord?.manager || "Sem próximo gestor",
@@ -4408,27 +4419,12 @@ function hierarchyPage() {
   });
   const withoutLeader = scopedEmployees.filter((employee) => !employee.manager || ["Sem líder", "Consultar ficha"].includes(employee.manager));
   const directored = scopedEmployees.filter((employee) => isLeaderNameMatch(employee.manager, "Carlos Junior") || isLeaderNameMatch(employee.manager, "Anderson Nascimento"));
-  const allowedLeaderNames = [
-    "Carlos Junior",
-    "Anderson Nascimento",
-    "Ana Paula Maia Paiva",
-    "Maria Andressa Lourenco do Nascimento",
-    "Luiz Felipe da Silva Rodrigues",
-    "Lysiane Sarmento Castro Monteiro Barros",
-    "Rubenon Honorato da Silva Filho",
-    "Angelo da Gama Freire",
-    "Jonathan Alexandre dos Santos",
-    "Jose Joellington Gomes dos Santos",
-  ];
   const editableEmployees = scopedEmployees
     .filter((employee) => employee.dbId && !normalizeText(employee.role).includes("DIRETORIA"))
     .filter((employee) => !hierarchySearch || [employee.name, employee.company, employee.department, employee.role, employee.manager].some((value) => normalizeText(value).includes(hierarchySearch)))
     .sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
   const leaderOptions = activeEmployees
-    .filter((employee) => {
-      if (!employee.dbId) return false;
-      return allowedLeaderNames.some((leaderName) => isSamePerson(leaderName, employee.name));
-    })
+    .filter((employee) => employee.dbId)
     .sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
   const companyButtons = `
     <div class="company-switcher dashboard-company-switcher">
@@ -4474,7 +4470,7 @@ function hierarchyPage() {
         <tbody>
           ${editableEmployees
             .map((employee) => {
-              const currentLeader = leaderOptions.find((option) => isLeaderNameMatch(employee.manager, option.name));
+              const currentLeader = leaderOptions.find((option) => employeeReportsTo(employee, option));
               return `
                 <tr>
                   <td><strong>${employee.name}</strong><br><span class="muted">${employee.role}</span></td>
@@ -4521,6 +4517,7 @@ function hierarchyPage() {
 
 function visualOrgChart(leaders, withoutLeader) {
   const activeLeaders = leaders.filter((leader) => leader.directReports.length).slice(0, 18);
+  const currentUserKey = normalizeText(currentUser.name);
   return `<div class="card pad org-chart-card" style="margin-top:16px">
     <div class="section-title"><div><h2>Organograma visual</h2><p>Estrutura por gestor imediato, construída a partir do vínculo de liderança cadastrado.</p></div>${statusPill(`${activeLeaders.length} nós`)}</div>
     <div class="org-chart">
@@ -4528,10 +4525,10 @@ function visualOrgChart(leaders, withoutLeader) {
       <div class="org-branches">
         ${
           activeLeaders.length
-            ? activeLeaders.map((leader) => `<div class="org-node">
-                <div class="org-leader"><strong>${escapeHtml(leader.name)}</strong><span>${escapeHtml(leader.role)} · ${escapeHtml(leader.company)}</span></div>
+            ? activeLeaders.map((leader) => `<div class="org-node ${normalizeText(leader.name) === currentUserKey ? "current-user" : ""}">
+                <button class="org-leader" data-employee="${leader.dbId || leader.id}"><strong>${escapeHtml(leader.name)}</strong><span>${escapeHtml(leader.role)} · ${escapeHtml(leader.company)}</span></button>
                 <div class="org-team">
-                  ${leader.directReports.slice(0, 10).map((employee) => `<span>${escapeHtml(employee.name)}<small>${escapeHtml(employee.department || "Sem setor")}</small></span>`).join("")}
+                  ${leader.directReports.slice(0, 10).map((employee) => `<button class="${normalizeText(employee.name) === currentUserKey ? "current-user" : ""}" data-employee="${employee.dbId || employee.id}">${escapeHtml(employee.name)}<small>${escapeHtml(employee.department || "Sem setor")}</small></button>`).join("")}
                   ${leader.directReports.length > 10 ? `<span>+${leader.directReports.length - 10} colaboradores<small>Equipe direta</small></span>` : ""}
                 </div>
               </div>`).join("")

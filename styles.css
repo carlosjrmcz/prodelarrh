@@ -1774,6 +1774,7 @@ td {
 .org-root,
 .org-leader,
 .org-team span,
+.org-team button,
 .org-alert {
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -1807,6 +1808,17 @@ td {
 
 .org-leader {
   background: #f8fafc;
+  color: var(--ink);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  width: 100%;
+}
+
+.org-leader:hover,
+.org-team button:hover {
+  border-color: rgba(31, 122, 109, 0.45);
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.08);
 }
 
 .org-team {
@@ -1814,8 +1826,21 @@ td {
   gap: 6px;
 }
 
-.org-team span {
+.org-team span,
+.org-team button {
   background: #fff;
+  color: var(--ink);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  text-align: left;
+}
+
+.org-node.current-user .org-leader,
+.org-team button.current-user {
+  border-color: var(--brand);
+  background: #eaf7f3;
+  box-shadow: inset 4px 0 0 var(--brand);
 }
 
 .org-alert {
