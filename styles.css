@@ -762,6 +762,78 @@ button {
   margin-top: 16px;
 }
 
+.routine-period-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+.routine-period-bar span,
+.routine-filter-row span,
+.rh-task-edit span {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0;
+}
+
+.routine-period-bar strong {
+  display: block;
+  color: var(--ink);
+  font-size: 18px;
+  margin-top: 2px;
+}
+
+.period-actions,
+.routine-filter-row,
+.task-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.routine-filter-row {
+  margin-bottom: 12px;
+}
+
+.routine-filter-row label {
+  display: grid;
+  gap: 4px;
+  min-width: 180px;
+}
+
+.routine-filter-row select,
+.rh-task-edit input,
+.rh-task-edit select,
+.rh-task-edit textarea {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: white;
+  color: var(--ink);
+  padding: 9px 10px;
+  font: inherit;
+}
+
+.rh-task-edit {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.rh-task-edit .full {
+  grid-column: 1 / -1;
+}
+
 .temporary-routines-panel {
   position: sticky;
   top: 16px;

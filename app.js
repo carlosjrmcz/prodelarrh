@@ -575,6 +575,11 @@ const state = {
   peopleControlActiveModule: "aso",
   peopleControlMessage: "",
   rhTaskMessage: "",
+  rhTaskStatusFilter: "open",
+  rhTaskTypeFilter: "all",
+  rhTaskEditId: "",
+  rhRoutineCompetence: "",
+  rhRoutineHistoryOpen: false,
   vacationMessage: "",
   pointMessage: "",
   pointAdjustmentOpen: false,
@@ -1072,10 +1077,10 @@ function findEmployeeByCpf(cpf) {
 
 function appProfileFromRoleCode(roleCode) {
   const normalized = normalizeText(roleCode);
-  if (["rh", "hr", "rh_admin", "admin"].includes(normalized)) return "RH";
-  if (["diretoria", "director", "executive"].includes(normalized)) return "Diretoria";
-  if (["gestor", "gerente", "manager"].includes(normalized)) return "Gerente";
-  if (["supervisor", "lider", "leader"].includes(normalized)) return "Supervisor";
+  if (["RH", "HR", "RH_ADMIN", "ADMIN"].includes(normalized)) return "RH";
+  if (["DIRETORIA", "DIRECTOR", "EXECUTIVE"].includes(normalized)) return "Diretoria";
+  if (["GESTOR", "GERENTE", "MANAGER"].includes(normalized)) return "Gerente";
+  if (["SUPERVISOR", "LIDER", "LEADER"].includes(normalized)) return "Supervisor";
   return "Colaborador";
 }
 
@@ -1222,6 +1227,27 @@ function formatPaystubCompetence(value) {
     "12": "Dezembro",
   };
   return year && months[month] ? `${months[month]}/${year}` : String(value);
+}
+
+function currentMonthKey(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  return `${year}-${month}`;
+}
+
+function shiftMonthKey(monthKey, delta) {
+  const [year, month] = String(monthKey || currentMonthKey()).split("-").map(Number);
+  const date = new Date(year || new Date().getFullYear(), (month || 1) - 1 + delta, 1);
+  return currentMonthKey(date);
+}
+
+function routineCompetence() {
+  if (!state.rhRoutineCompetence) state.rhRoutineCompetence = currentMonthKey();
+  return state.rhRoutineCompetence;
+}
+
+function routineCompetenceLabel(monthKey = routineCompetence()) {
+  return formatPaystubCompetence(`${monthKey}-01`);
 }
 
 function supabaseStoragePublicUrl(bucket, path) {
@@ -3733,8 +3759,10 @@ function rhRoutinesPage() {
   const directorMode = currentUser.profile === "Diretoria";
   const activeCompany = state.company || "Todas";
   const routineStatus = rhRoutineStatusStore();
+  const competence = routineCompetence();
+  const competenceLabel = routineCompetenceLabel(competence);
   const companyKeys = companies.map((company) => company.key);
-  const countDone = (companyKey) => routines.filter((routine) => routineStatus[rhRoutineKey(companyKey, routine.key)]?.done).length;
+  const countDone = (companyKey) => routines.filter((routine) => routineStatus[rhRoutineKey(companyKey, routine.key, competence)]?.done).length;
   const totalSlots = routines.length * companyKeys.length;
   const totalDone = companyKeys.reduce((sum, companyKey) => sum + countDone(companyKey), 0);
   const activeDone = activeCompany === "Todas" ? totalDone : countDone(activeCompany);
@@ -3744,8 +3772,19 @@ function rhRoutinesPage() {
   const openTasks = taskRows.filter((task) => task.status !== "done").length;
 
   return `
+    <div class="routine-period-bar">
+      <div>
+        <span>Competência</span>
+        <strong>${competenceLabel}</strong>
+      </div>
+      <div class="period-actions">
+        <button class="btn small" data-routine-competence="prev">‹ Mês anterior</button>
+        <button class="btn small" data-routine-competence="current">Mês atual</button>
+        <button class="btn small" data-routine-competence="next">Próximo mês ›</button>
+      </div>
+    </div>
     <div class="grid metrics">
-      ${metric("Rotinas / importações", `${activeDone} de ${activeTotal}`, activeCompany === "Todas" ? "Consolidado das três empresas" : `Ciclo de ${activeCompany}`, "☑")}
+      ${metric("Rotinas / importações", `${activeDone} de ${activeTotal}`, activeCompany === "Todas" ? `Consolidado · ${competenceLabel}` : `${activeCompany} · ${competenceLabel}`, "☑")}
       ${metric("Entradas com arquivo", routines.filter((routine) => routine.hasFile).length, "Itens que aceitam arrastar/selecionar", "⇩")}
       ${metric("Pendências", pending, "Ainda sem check neste ciclo", "!")}
       ${metric("Tarefas abertas", openTasks, "Rotina independente do RH", "□")}
@@ -3756,8 +3795,9 @@ function rhRoutinesPage() {
     </div>
     <div class="rh-routines-layout">
       <div>
-        ${activeCompany === "Todas" ? consolidatedRoutineTable(routines, routineStatus, directorMode) : companyRoutineChecklist(routines, routineStatus, activeCompany, directorMode)}
+        ${activeCompany === "Todas" ? consolidatedRoutineTable(routines, routineStatus, directorMode, competence) : companyRoutineChecklist(routines, routineStatus, activeCompany, directorMode, competence)}
         ${rhTasksPanel(taskRows, directorMode)}
+        ${routineHistoryPanel(routineStatus, routines, activeCompany, competence)}
       </div>
       ${temporaryRoutinesPanel(directorMode)}
     </div>
@@ -3812,8 +3852,12 @@ function saveRhTaskStore(tasks) {
 }
 
 function rhTasksForCompany(companyKey) {
+  const statusFilter = state.rhTaskStatusFilter || "open";
+  const typeFilter = state.rhTaskTypeFilter || "all";
   return rhTaskStore()
     .filter((task) => companyKey === "Todas" || task.company === companyKey)
+    .filter((task) => (statusFilter === "all" ? true : statusFilter === "open" ? task.status !== "done" : task.status === statusFilter))
+    .filter((task) => typeFilter === "all" || task.type === typeFilter)
     .sort((a, b) => String(a.status).localeCompare(String(b.status)) || String(a.dueDate || "").localeCompare(String(b.dueDate || "")));
 }
 
@@ -3834,6 +3878,7 @@ function saveRhTask(form) {
   });
   saveRhTaskStore(tasks);
   state.rhTaskMessage = "Tarefa criada para acompanhamento do RH.";
+  state.rhTaskEditId = "";
 }
 
 function updateRhTaskStatus(taskId, status) {
@@ -3845,11 +3890,52 @@ function updateRhTaskStatus(taskId, status) {
   saveRhTaskStore(tasks);
 }
 
+function updateRhTask(form, taskId) {
+  const data = new FormData(form);
+  const tasks = rhTaskStore().map((task) =>
+    task.id === taskId
+      ? {
+          ...task,
+          title: String(data.get("title") || "").trim(),
+          company: String(data.get("company") || task.company || "Todas"),
+          type: String(data.get("type") || task.type || "general"),
+          priority: String(data.get("priority") || task.priority || "normal"),
+          dueDate: String(data.get("dueDate") || ""),
+          description: String(data.get("description") || "").trim(),
+          updatedBy: currentUser.name,
+          updatedAt: new Date().toISOString(),
+        }
+      : task,
+  );
+  saveRhTaskStore(tasks);
+  state.rhTaskEditId = "";
+  state.rhTaskMessage = "Tarefa atualizada.";
+}
+
 function rhTasksPanel(tasks, directorMode) {
   const companyOptions = ["Prodelar", "Colmob", "Servimec"];
+  const typeOptions = [
+    ["all", "Todos os tipos"],
+    ["medical_certificate", "Atestado"],
+    ["experience_contract", "Contrato de experiência"],
+    ["document", "Documento"],
+    ["payroll", "Folha"],
+    ["general", "Outros controles"],
+  ];
+  const statusOptions = [
+    ["open", "Abertas"],
+    ["pending", "Pendentes"],
+    ["in_progress", "Em execução"],
+    ["done", "Concluídas"],
+    ["all", "Todas"],
+  ];
   return `<div class="card pad rh-tasks-panel" style="margin-top:16px">
     <div class="section-title"><div><h2>Tarefas do RH</h2><p>Controle independente para atestados, contratos de experiência e demais pendências operacionais.</p></div>${statusPill(tasks.filter((task) => task.status !== "done").length)}</div>
     ${state.rhTaskMessage ? `<div class="notice form-notice"><strong>Retorno</strong><p>${escapeHtml(state.rhTaskMessage)}</p></div>` : ""}
+    <div class="routine-filter-row">
+      <label><span>Status</span><select id="rh-task-status-filter">${statusOptions.map(([value, label]) => `<option value="${value}" ${state.rhTaskStatusFilter === value ? "selected" : ""}>${label}</option>`).join("")}</select></label>
+      <label><span>Tipo</span><select id="rh-task-type-filter">${typeOptions.map(([value, label]) => `<option value="${value}" ${state.rhTaskTypeFilter === value ? "selected" : ""}>${label}</option>`).join("")}</select></label>
+    </div>
     <form class="form-grid compact-task-form" data-rh-task-form>
       <label class="form-field"><span>Tarefa</span><input name="title" required placeholder="Ex.: Avaliar experiência de 60 dias" ${directorMode ? "disabled" : ""} /></label>
       <label class="form-field"><span>Empresa</span><select name="company" ${directorMode ? "disabled" : ""}>${companyOptions.map((company) => `<option ${state.company === company ? "selected" : ""}>${company}</option>`).join("")}</select></label>
@@ -3862,13 +3948,31 @@ function rhTasksPanel(tasks, directorMode) {
     <div class="doc-list rh-task-list">
       ${
         tasks.length
-          ? tasks.map((task) => `<div class="doc rh-task-item">
-              <div><strong>${escapeHtml(task.title)}</strong><span>${escapeHtml(task.company)} · ${escapeHtml(task.type)} · ${task.dueDate ? formatDate(task.dueDate) : "Sem prazo"} · ${escapeHtml(task.createdBy || "RH")}</span>${task.description ? `<br><span>${escapeHtml(task.description)}</span>` : ""}</div>
-              <div class="task-actions">${statusPill(task.status === "done" ? "Concluído" : task.status === "in_progress" ? "Em execução" : "Pendente")}<button class="btn small" data-rh-task-status="${task.id}" data-status="${task.status === "done" ? "pending" : "done"}" ${directorMode ? "disabled" : ""}>${task.status === "done" ? "Reabrir" : "Concluir"}</button></div>
-            </div>`).join("")
+          ? tasks.map((task) => rhTaskItem(task, directorMode, companyOptions, typeOptions)).join("")
           : `<div class="empty">Nenhuma tarefa criada para este filtro.</div>`
       }
     </div>
+  </div>`;
+}
+
+function rhTaskItem(task, directorMode, companyOptions, typeOptions) {
+  if (state.rhTaskEditId === task.id) {
+    return `<form class="doc rh-task-item rh-task-edit" data-rh-task-edit-form="${task.id}">
+      <label><span>Tarefa</span><input name="title" required value="${escapeHtml(task.title)}" ${directorMode ? "disabled" : ""} /></label>
+      <label><span>Empresa</span><select name="company" ${directorMode ? "disabled" : ""}>${companyOptions.map((company) => `<option ${task.company === company ? "selected" : ""}>${company}</option>`).join("")}</select></label>
+      <label><span>Tipo</span><select name="type" ${directorMode ? "disabled" : ""}>${typeOptions.filter(([value]) => value !== "all").map(([value, label]) => `<option value="${value}" ${task.type === value ? "selected" : ""}>${label}</option>`).join("")}</select></label>
+      <label><span>Prioridade</span><select name="priority" ${directorMode ? "disabled" : ""}>${["low", "normal", "high", "critical"].map((priority) => `<option value="${priority}" ${task.priority === priority ? "selected" : ""}>${priority}</option>`).join("")}</select></label>
+      <label><span>Prazo</span><input name="dueDate" type="date" value="${escapeHtml(task.dueDate || "")}" ${directorMode ? "disabled" : ""} /></label>
+      <label class="full"><span>Observação</span><textarea name="description" rows="2" ${directorMode ? "disabled" : ""}>${escapeHtml(task.description || "")}</textarea></label>
+      <div class="task-actions full">
+        <button class="btn small primary" type="submit" ${directorMode ? "disabled" : ""}>Salvar</button>
+        <button class="btn small" type="button" data-rh-task-edit-cancel>Cancelar</button>
+      </div>
+    </form>`;
+  }
+  return `<div class="doc rh-task-item">
+    <div><strong>${escapeHtml(task.title)}</strong><span>${escapeHtml(task.company)} · ${escapeHtml(task.type)} · ${task.dueDate ? formatDate(task.dueDate) : "Sem prazo"} · ${escapeHtml(task.createdBy || "RH")}</span>${task.description ? `<br><span>${escapeHtml(task.description)}</span>` : ""}</div>
+    <div class="task-actions">${statusPill(task.status === "done" ? "Concluído" : task.status === "in_progress" ? "Em execução" : "Pendente")}<button class="btn small" data-rh-task-edit="${task.id}" ${directorMode ? "disabled" : ""}>Editar</button><button class="btn small" data-rh-task-status="${task.id}" data-status="${task.status === "done" ? "pending" : "done"}" ${directorMode ? "disabled" : ""}>${task.status === "done" ? "Reabrir" : "Concluir"}</button></div>
   </div>`;
 }
 
@@ -3886,8 +3990,8 @@ function temporaryRhRoutines() {
     }));
 }
 
-function rhRoutineKey(companyKey, routineKey) {
-  return `${companyKey}::${routineKey}`;
+function rhRoutineKey(companyKey, routineKey, competence = routineCompetence()) {
+  return `${competence}::${companyKey}::${routineKey}`;
 }
 
 function routineStatusCell(status) {
@@ -3897,7 +4001,7 @@ function routineStatusCell(status) {
   return `<div class="routine-status-cell"><span class="routine-state done">✓</span><span class="muted">${status.fileName || "Executado"}</span></div>`;
 }
 
-function consolidatedRoutineTable(routines, routineStatus, directorMode) {
+function consolidatedRoutineTable(routines, routineStatus, directorMode, competence = routineCompetence()) {
   return `<div class="card table-wrap">
     <div class="section-title table-title">
       <div><h2>Rotinas / importações mensais</h2><p>Visão consolidada das três empresas. Para anexar arquivo, selecione uma empresa acima.</p></div>
@@ -3910,7 +4014,7 @@ function consolidatedRoutineTable(routines, routineStatus, directorMode) {
           .map(
             (routine) => `<tr>
               <td><strong>${routine.title}</strong><br><span class="muted">${routine.description}</span></td>
-              ${companies.map((company) => `<td>${routineStatusCell(routineStatus[rhRoutineKey(company.key, routine.key)])}</td>`).join("")}
+              ${companies.map((company) => `<td>${routineStatusCell(routineStatus[rhRoutineKey(company.key, routine.key, competence)])}</td>`).join("")}
               <td><span class="muted">${routine.folder}</span></td>
             </tr>`,
           )
@@ -3920,7 +4024,7 @@ function consolidatedRoutineTable(routines, routineStatus, directorMode) {
   </div>`;
 }
 
-function companyRoutineChecklist(routines, routineStatus, activeCompany, directorMode) {
+function companyRoutineChecklist(routines, routineStatus, activeCompany, directorMode, competence = routineCompetence()) {
   return `<div class="card table-wrap">
     <div class="section-title table-title">
       <div><h2>Rotinas / importações mensais - ${activeCompany}</h2><p>Arraste/selecione o arquivo da rotina ou execute a busca automática nas pastas de entrada.</p></div>
@@ -3931,7 +4035,7 @@ function companyRoutineChecklist(routines, routineStatus, activeCompany, directo
       <tbody>
         ${routines
           .map((routine) => {
-            const key = rhRoutineKey(activeCompany, routine.key);
+            const key = rhRoutineKey(activeCompany, routine.key, competence);
             const status = routineStatus[key];
             return `<tr class="${status?.done ? "routine-row-done" : "routine-row-pending"}">
               <td>${routineStatusCell(status)}</td>
@@ -3956,6 +4060,7 @@ function setRoutineStatus(companyKey, routineKey, status) {
   const store = rhRoutineStatusStore();
   store[rhRoutineKey(companyKey, routineKey)] = {
     ...status,
+    competence: routineCompetence(),
     by: currentUser.name,
     at: new Date().toISOString(),
   };
@@ -3978,8 +4083,11 @@ async function executeRoutineFolderCheck(companyKey) {
     if (!response.ok) throw new Error("Verificador local indisponível");
     const payload = await response.json();
     Object.entries(payload.results || {}).forEach(([key, status]) => {
-      store[key] = {
+      const parts = key.split("::");
+      const statusKey = parts.length === 2 ? rhRoutineKey(parts[0], parts[1]) : key;
+      store[statusKey] = {
         ...status,
+        competence: routineCompetence(),
         by: currentUser.name,
         at: payload.checkedAt || new Date().toISOString(),
       };
@@ -3991,6 +4099,7 @@ async function executeRoutineFolderCheck(companyKey) {
           done: !routine.hasFile,
           fileName: routine.hasFile ? "" : "Executado pelo painel",
           error: routine.hasFile ? "Não consegui verificar a pasta de entrada. Reinicie o servidor local para ativar a checagem automática." : "",
+          competence: routineCompetence(),
           by: currentUser.name,
           at: new Date().toISOString(),
         };
@@ -3998,6 +4107,49 @@ async function executeRoutineFolderCheck(companyKey) {
     });
   }
   saveRhRoutineStatusStore(store);
+}
+
+function routineHistoryPanel(routineStatus, routines, activeCompany, currentCompetence) {
+  const routineTitles = new Map(routines.map((routine) => [routine.key, routine.title]));
+  const rows = Object.entries(routineStatus)
+    .map(([key, status]) => {
+      const parts = key.split("::");
+      if (parts.length < 3) return null;
+      const [competence, company, routineKey] = parts;
+      if (competence === currentCompetence) return null;
+      if (activeCompany !== "Todas" && company !== activeCompany) return null;
+      return {
+        key,
+        competence,
+        company,
+        routineKey,
+        title: routineTitles.get(routineKey) || routineKey,
+        status,
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => String(b.status?.at || b.competence).localeCompare(String(a.status?.at || a.competence)))
+    .slice(0, 40);
+  return `<div class="card pad routine-history-panel" style="margin-top:16px">
+    <div class="section-title">
+      <div><h2>Histórico de competências</h2><p>Registros de meses anteriores ficam guardados sem misturar com o ciclo atual.</p></div>
+      <button class="btn small" data-routine-history-toggle>${state.rhRoutineHistoryOpen ? "Ocultar" : "Mostrar"}</button>
+    </div>
+    ${
+      state.rhRoutineHistoryOpen
+        ? `<div class="doc-list">
+            ${
+              rows.length
+                ? rows.map((row) => `<div class="doc">
+                    <div><strong>${escapeHtml(row.title)}</strong><span>${routineCompetenceLabel(row.competence)} · ${escapeHtml(row.company)} · ${row.status?.fileName || "Executado"}</span></div>
+                    <div>${statusPill(row.status?.done ? "Concluído" : "Pendente")}</div>
+                  </div>`).join("")
+                : `<div class="empty">Nenhum histórico anterior para este filtro.</div>`
+            }
+          </div>`
+        : ""
+    }
+  </div>`;
 }
 
 function temporaryRoutinesPanel(directorMode) {
@@ -5347,6 +5499,8 @@ function handleDelegatedAppClick(event, appRoot) {
       "[data-dashboard-company]",
       "[data-requests-company]",
       "button[data-routine-company]",
+      "button[data-routine-competence]",
+      "button[data-routine-history-toggle]",
       "[data-master-company]",
       "[data-master-create]",
       "[data-master-cancel]",
@@ -5366,6 +5520,8 @@ function handleDelegatedAppClick(event, appRoot) {
       "[data-routine-execute]",
       "[data-temporary-routine-close]",
       "[data-rh-task-status]",
+      "[data-rh-task-edit]",
+      "[data-rh-task-edit-cancel]",
       "[data-show-more]",
       "[data-employee]",
       "[data-employee-company]",
@@ -5413,12 +5569,29 @@ function handleDelegatedAppClick(event, appRoot) {
     target.disabled = true;
     target.textContent = "Verificando...";
     executeRoutineFolderCheck(dataset.routineExecute).then(renderPage);
+  } else if (dataset.routineCompetence !== undefined) {
+    if (dataset.routineCompetence === "prev") state.rhRoutineCompetence = shiftMonthKey(routineCompetence(), -1);
+    if (dataset.routineCompetence === "next") state.rhRoutineCompetence = shiftMonthKey(routineCompetence(), 1);
+    if (dataset.routineCompetence === "current") state.rhRoutineCompetence = currentMonthKey();
+    state.rhTaskMessage = "";
+    renderPage();
+  } else if (dataset.routineHistoryToggle !== undefined) {
+    state.rhRoutineHistoryOpen = !state.rhRoutineHistoryOpen;
+    renderPage();
   } else if (dataset.rhTaskStatus !== undefined) {
     updateRhTaskStatus(dataset.rhTaskStatus, dataset.status || "done");
     state.rhTaskMessage = dataset.status === "done" ? "Tarefa concluída." : "Tarefa reaberta.";
     renderPage();
+  } else if (dataset.rhTaskEdit !== undefined) {
+    state.rhTaskEditId = dataset.rhTaskEdit;
+    state.rhTaskMessage = "";
+    renderPage();
+  } else if (dataset.rhTaskEditCancel !== undefined) {
+    state.rhTaskEditId = "";
+    renderPage();
   } else if (dataset.routineCompany !== undefined && dataset.routineUpload === undefined && dataset.routineDrop === undefined) {
     state.company = dataset.routineCompany || state.company;
+    state.rhTaskEditId = "";
     renderPage();
   } else if (dataset.masterCompany !== undefined) {
     state.company = dataset.masterCompany || "Todas";
@@ -5738,6 +5911,29 @@ function bind() {
       renderPage();
     });
   });
+  document.querySelectorAll("[data-rh-task-edit-form]").forEach((form) => {
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      updateRhTask(form, form.dataset.rhTaskEditForm);
+      renderPage();
+    });
+  });
+  const rhTaskStatusFilter = document.querySelector("#rh-task-status-filter");
+  if (rhTaskStatusFilter) {
+    rhTaskStatusFilter.addEventListener("change", (event) => {
+      state.rhTaskStatusFilter = event.target.value;
+      state.rhTaskEditId = "";
+      renderPage();
+    });
+  }
+  const rhTaskTypeFilter = document.querySelector("#rh-task-type-filter");
+  if (rhTaskTypeFilter) {
+    rhTaskTypeFilter.addEventListener("change", (event) => {
+      state.rhTaskTypeFilter = event.target.value;
+      state.rhTaskEditId = "";
+      renderPage();
+    });
+  }
   const search = document.querySelector("#search");
   if (search) {
     search.addEventListener("input", (event) => {
