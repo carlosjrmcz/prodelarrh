@@ -579,6 +579,7 @@ const state = {
   announcementSubject: "",
   announcementMessage: "",
   announcementResult: "",
+  emailReviewMessage: "",
   rhTaskMessage: "",
   rhTaskStatusFilter: "open",
   rhTaskTypeFilter: "all",
@@ -607,6 +608,8 @@ let vacationForecasts = [];
 let registrationCards = [];
 let paystubRecords = [];
 let employeeTimelineEvents = [];
+let emailReviewEvents = [];
+let emailTemplateRows = [];
 let vacationSearchDebounce = null;
 let lightweightRenderTimer = null;
 let renderMemo = {};
@@ -786,6 +789,7 @@ const pages = [
       ["accounting", "⇪", "Pacote mensal", ["RH", "Diretoria"]],
       ["emails", "✉", "E-mails", ["RH", "Diretoria"]],
       ["announcement", "+", "Novo Comunicado", ["RH", "Diretoria"]],
+      ["emailReview", "✓", "Aprovar e-mails", ["RH"]],
       ["masterData", "◎", "Empresas e setores", ["RH", "Diretoria"]],
       ["hierarchy", "⇄", "Hierarquia", ["RH", "Diretoria"]],
       ["employees", "☷", "Colaboradores", ["RH", "Diretoria"]],
@@ -817,6 +821,7 @@ const titles = {
   paystubs: ["Contracheques", "Processamento do PDF único em arquivos individuais por colaborador."],
   emails: ["Central de e-mails", "Fila transacional para notificações, aprovações, comunicados e portal."],
   announcement: ["Novo Comunicado", "Comunicado individual avulso para colaborador, com preview e fila segura de e-mail."],
+  emailReview: ["Aprovação de e-mails", "Fila de eventos aguardando revisão antes do envio."],
 };
 
 function statusPill(value) {
@@ -918,6 +923,8 @@ function applyRuntimeDataCache(cache) {
   registrationCards = Array.isArray(cache.registrationCards) ? cache.registrationCards : [];
   paystubRecords = Array.isArray(cache.paystubRecords) ? cache.paystubRecords : [];
   employeeTimelineEvents = Array.isArray(cache.employeeTimelineEvents) ? cache.employeeTimelineEvents : [];
+  emailReviewEvents = Array.isArray(cache.emailReviewEvents) ? cache.emailReviewEvents : [];
+  emailTemplateRows = Array.isArray(cache.emailTemplateRows) ? cache.emailTemplateRows : [];
   applySimulationHierarchy();
   rebuildRuntimeIndexes();
   updateRuntimeDataSignature();
@@ -946,6 +953,8 @@ function saveRuntimeDataCache() {
         registrationCards,
         paystubRecords,
         employeeTimelineEvents,
+        emailReviewEvents,
+        emailTemplateRows,
       }),
     );
   } catch {
@@ -966,6 +975,8 @@ function clearSampleDataForSupabaseBoot() {
   registrationCards = [];
   paystubRecords = [];
   employeeTimelineEvents = [];
+  emailReviewEvents = [];
+  emailTemplateRows = [];
   markRuntimeIndexesDirty();
   updateRuntimeDataSignature();
 }
@@ -977,14 +988,16 @@ function runtimeDataPayloadSignature(payload = {}) {
   const vacationRowsForSignature = payload.vacationForecasts || vacationForecasts;
   const paystubRows = payload.paystubRecords || paystubRecords;
   const timelineRows = payload.employeeTimelineEvents || employeeTimelineEvents;
+  const emailReviewRows = payload.emailReviewEvents || emailReviewEvents;
   const tailOf = (rows) => rows[rows.length - 1] || {};
-  const counts = [employeeRows.length, requestRows.length, documentRows.length, vacationRowsForSignature.length, paystubRows.length, timelineRows.length];
+  const counts = [employeeRows.length, requestRows.length, documentRows.length, vacationRowsForSignature.length, paystubRows.length, timelineRows.length, emailReviewRows.length];
   const markers = [
     tailOf(employeeRows).id || "",
     requestRows[0]?.protocol || requestRows[0]?.id || "",
     vacationRowsForSignature[0]?.id || vacationRowsForSignature[0]?.employee_name || "",
     paystubRows[0]?.id || paystubRows[0]?.file_name || "",
     timelineRows[0]?.id || timelineRows[0]?.title || "",
+    emailReviewRows[0]?.id || emailReviewRows[0]?.template_key || "",
   ];
   return `${counts.join(":")}|${markers.map(normalizeText).join(":")}`;
 }
@@ -1855,6 +1868,8 @@ async function loadSupabaseDataFresh() {
     registrationCards = [];
     paystubRecords = [];
     employeeTimelineEvents = [];
+    emailReviewEvents = [];
+    emailTemplateRows = [];
     applySimulationHierarchy();
     state.dataStatus = "Supabase indisponível";
     renderPage();
@@ -1864,7 +1879,7 @@ async function loadSupabaseDataFresh() {
   try {
     const previousSignature = runtimeDataSignature;
     const wasAlreadyConnected = state.dataStatus.startsWith("Supabase conectado");
-    const [employeeResult, requestResult, vacationResult, documentResult, employeeDocumentResult, timelineResult] = await Promise.all([
+    const [employeeResult, requestResult, vacationResult, documentResult, employeeDocumentResult, timelineResult, emailReviewResult, emailTemplateResult] = await Promise.all([
       supabaseClient.from("hr_employee_directory").select("*").order("full_name"),
       supabaseClient
         .from("hr_requests")
@@ -1890,9 +1905,19 @@ async function loadSupabaseDataFresh() {
         .select("id,employee_id,event_type,module_name,title,description,status,metadata,created_at,related_table,related_record_id")
         .order("created_at", { ascending: false })
         .limit(500),
+      supabaseClient
+        .from("email_events")
+        .select("id,app_name,module_name,event_type,employee_id,employee_name,recipient_email,recipient_name,recipient_type,subject,template_key,payload,status,created_by,created_at,scheduled_for,last_error")
+        .eq("status", "waiting_review")
+        .order("created_at", { ascending: false })
+        .limit(100),
+      supabaseClient
+        .from("email_templates")
+        .select("template_key,subject_template,body_template,body_html_template")
+        .eq("app_name", "recursos_humanos"),
     ]);
 
-    const errors = [employeeResult.error, requestResult.error, vacationResult.error, documentResult.error, employeeDocumentResult.error, timelineResult.error].filter(Boolean);
+    const errors = [employeeResult.error, requestResult.error, vacationResult.error, documentResult.error, employeeDocumentResult.error, timelineResult.error, emailReviewResult.error, emailTemplateResult.error].filter(Boolean);
     if (errors.length) {
       employees = [];
       requests = [];
@@ -1902,6 +1927,8 @@ async function loadSupabaseDataFresh() {
       registrationCards = [];
       paystubRecords = [];
       employeeTimelineEvents = [];
+      emailReviewEvents = [];
+      emailTemplateRows = [];
       applySimulationHierarchy();
       state.dataStatus = `Supabase conectado, aguardando ajuste de base: ${errors[0].message}`;
       renderPage();
@@ -1995,6 +2022,31 @@ async function loadSupabaseDataFresh() {
       related_table: row.related_table || "",
       related_record_id: row.related_record_id || "",
     }));
+    emailReviewEvents = (emailReviewResult.data || []).map((row) => ({
+      id: row.id,
+      app_name: row.app_name || "",
+      module_name: row.module_name || "",
+      event_type: row.event_type || "",
+      employee_id: row.employee_id || "",
+      employee_name: row.employee_name || "",
+      recipient_email: row.recipient_email || "",
+      recipient_name: row.recipient_name || "",
+      recipient_type: row.recipient_type || "",
+      subject: row.subject || "",
+      template_key: row.template_key || "",
+      payload: row.payload || {},
+      status: row.status || "",
+      created_by: row.created_by || "",
+      created_at: row.created_at || "",
+      scheduled_for: row.scheduled_for || "",
+      last_error: row.last_error || "",
+    }));
+    emailTemplateRows = (emailTemplateResult.data || []).map((row) => ({
+      template_key: row.template_key || "",
+      subject_template: row.subject_template || "",
+      body_template: row.body_template || "",
+      body_html_template: row.body_html_template || "",
+    }));
     state.vacationMessage = vacationForecasts.length ? "" : "Nenhuma previsão de férias cadastrada no Supabase.";
     applySimulationHierarchy();
     rebuildRuntimeIndexes();
@@ -2014,6 +2066,8 @@ async function loadSupabaseDataFresh() {
     registrationCards = [];
     paystubRecords = [];
     employeeTimelineEvents = [];
+    emailReviewEvents = [];
+    emailTemplateRows = [];
     applySimulationHierarchy();
     state.dataStatus = `Erro de conexão: ${error.message}`;
     renderPage();
@@ -5089,6 +5143,95 @@ function announcementPage() {
     </div>`;
 }
 
+function canReviewEmails() {
+  return currentUser.profile === "RH";
+}
+
+function emailTemplateFor(templateKey) {
+  return emailTemplateRows.find((row) => row.template_key === templateKey) || null;
+}
+
+function renderEmailTemplateValue(templateValue, payload = {}) {
+  return String(templateValue || "").replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_match, key) => {
+    const value = key.split(".").reduce((current, part) => (current && current[part] !== undefined ? current[part] : ""), payload);
+    return value === null || value === undefined ? "" : String(value);
+  });
+}
+
+function emailReviewPreview(event) {
+  const payload = event.payload && typeof event.payload === "object" ? event.payload : {};
+  const template = emailTemplateFor(event.template_key);
+  const subject = event.subject || renderEmailTemplateValue(template?.subject_template || event.template_key || "Sem assunto", payload);
+  const bodyText = renderEmailTemplateValue(template?.body_template || payload.mensagem || payload.motivo || "", payload);
+  const bodyHtml = template?.body_html_template ? renderEmailTemplateValue(template.body_html_template, payload) : "";
+  return { subject, bodyText, bodyHtml };
+}
+
+function emailReviewMeta(event) {
+  const payload = event.payload && typeof event.payload === "object" ? event.payload : {};
+  const rows = [
+    ["Destinatário", `${event.recipient_name || "Sem nome"} · ${event.recipient_email || "sem e-mail"}`],
+    ["Template", event.template_key || "Sem template"],
+    ["Evento", event.event_type || "Sem evento"],
+    ["Módulo", event.module_name || "Sem módulo"],
+    ["Colaborador", event.employee_name || payload.colaborador_nome || payload.employee_name || "Não informado"],
+    ["Criado em", event.created_at ? formatDateTime(event.created_at) : "Não informado"],
+    ["Agendado para", event.scheduled_for ? formatDateTime(event.scheduled_for) : "Não informado"],
+  ];
+  if (event.last_error) rows.push(["Último erro", event.last_error]);
+  return rows;
+}
+
+function emailReviewCard(event) {
+  const preview = emailReviewPreview(event);
+  const canAct = canReviewEmails();
+  return `
+    <article class="card pad email-review-card">
+      <div class="section-title">
+        <div>
+          <h2>${escapeHtml(preview.subject)}</h2>
+          <p>${escapeHtml(event.recipient_name || "Sem nome")} · ${escapeHtml(event.recipient_email || "sem e-mail")}</p>
+        </div>
+        ${statusPill("Revisão RH")}
+      </div>
+      <div class="email-review-grid">
+        <div class="email-review-meta">
+          ${emailReviewMeta(event).map(([label, value]) => `<div><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`).join("")}
+        </div>
+        <div class="email-review-preview">
+          <div class="email-review-subject">${escapeHtml(preview.subject)}</div>
+          ${
+            preview.bodyHtml
+              ? `<iframe class="email-review-frame" title="Preview do e-mail ${escapeHtml(event.id)}" sandbox="" srcdoc="${escapeHtml(preview.bodyHtml)}"></iframe>`
+              : `<pre class="email-review-text">${escapeHtml(preview.bodyText || JSON.stringify(event.payload || {}, null, 2))}</pre>`
+          }
+        </div>
+      </div>
+      <div class="email-review-actions">
+        <button class="btn primary" type="button" data-email-review-approve="${event.id}" ${canAct ? "" : "disabled"}>Aprovar</button>
+        <button class="btn danger" type="button" data-email-review-discard="${event.id}" ${canAct ? "" : "disabled"}>Descartar</button>
+      </div>
+    </article>`;
+}
+
+function emailReviewPage() {
+  const allowed = canReviewEmails();
+  return `
+    ${state.emailReviewMessage ? `<div class="notice form-notice"><strong>Retorno</strong><p>${escapeHtml(state.emailReviewMessage)}</p></div>` : ""}
+    <div class="grid metrics">
+      <div class="metric"><span>Aguardando revisão</span><strong>${emailReviewEvents.length}</strong></div>
+      <div class="metric"><span>Perfil atual</span><strong>${escapeHtml(currentUser.profile)}</strong></div>
+      <div class="metric"><span>Ação permitida</span><strong>${allowed ? "Sim" : "Não"}</strong></div>
+    </div>
+    <div class="email-review-list">
+      ${
+        emailReviewEvents.length
+          ? emailReviewEvents.map(emailReviewCard).join("")
+          : `<div class="card pad empty">Nenhum e-mail aguardando revisão no momento.</div>`
+      }
+    </div>`;
+}
+
 function timeline() {
   return `
     <div class="timeline">
@@ -5184,6 +5327,7 @@ const pageRenderers = {
   paystubs: paystubsPage,
   emails: emailsPage,
   announcement: announcementPage,
+  emailReview: emailReviewPage,
 };
 
 function renderPage() {
@@ -5601,6 +5745,8 @@ function handleDelegatedAppClick(event, appRoot) {
       "[data-people-control-view]",
       "[data-people-control-inactivate]",
       "[data-announcement-employee]",
+      "[data-email-review-approve]",
+      "[data-email-review-discard]",
       "[data-routine-mark]",
       "[data-routine-execute]",
       "[data-temporary-routine-close]",
@@ -5738,6 +5884,10 @@ function handleDelegatedAppClick(event, appRoot) {
     state.announcementEmployeeId = dataset.announcementEmployee || "";
     state.announcementResult = "";
     renderPage();
+  } else if (dataset.emailReviewApprove !== undefined) {
+    updateEmailReviewStatus(dataset.emailReviewApprove, "pending");
+  } else if (dataset.emailReviewDiscard !== undefined) {
+    updateEmailReviewStatus(dataset.emailReviewDiscard, "cancelled");
   } else if (dataset.temporaryRoutineClose !== undefined) {
     const store = temporaryRoutineClosedStore();
     store[dataset.temporaryRoutineClose] = {
@@ -6283,6 +6433,39 @@ async function handleAnnouncementSubmit(event) {
   state.announcementResult = `Comunicado enfileirado para ${employee.name}. Evento ${result.id} com status ${result.status}.`;
   state.announcementSubject = "";
   state.announcementMessage = "";
+  renderPage();
+}
+
+async function updateEmailReviewStatus(eventId, status) {
+  if (!canReviewEmails()) {
+    state.emailReviewMessage = "Seu perfil não tem permissão para revisar e-mails.";
+    renderPage();
+    return;
+  }
+  if (!supabaseClient) {
+    state.emailReviewMessage = "Supabase indisponível para atualizar a fila.";
+    renderPage();
+    return;
+  }
+
+  const event = emailReviewEvents.find((item) => item.id === eventId);
+  const statusLabel = status === "pending" ? "aprovado para envio" : "descartado";
+  const { error } = await supabaseClient
+    .from("email_events")
+    .update({ status })
+    .eq("id", eventId)
+    .eq("status", "waiting_review");
+
+  if (error) {
+    state.emailReviewMessage = `Não foi possível atualizar o e-mail: ${error.message}`;
+    renderPage();
+    return;
+  }
+
+  emailReviewEvents = emailReviewEvents.filter((item) => item.id !== eventId);
+  updateRuntimeDataSignature();
+  saveRuntimeDataCache();
+  state.emailReviewMessage = `E-mail ${statusLabel}${event?.recipient_name ? ` para ${event.recipient_name}` : ""}.`;
   renderPage();
 }
 
