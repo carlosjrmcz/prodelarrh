@@ -333,7 +333,7 @@ const peopleControlModules = [
     sensitivity: "Sensível",
     receives: true,
     receivedRows: [
-      ["Atestado enviado pelo portal", "Cleyciane da Costa Santos", "Aguardando validação do RH"],
+      ["Atestado recebido pelo RH", "Cleyciane da Costa Santos", "Aguardando validação do RH"],
       ["Atestado entregue ao líder", "Ana Beatriz da Silva Gomes", "Completar período e retorno"],
     ],
     description: "Upload, validação RH, dias afastados e retorno previsto.",
@@ -390,21 +390,22 @@ const peopleControlModules = [
   },
   {
     key: "experience",
-    title: "Experiência",
-    fullTitle: "Experiência 45/90 dias",
+    title: "Contrato de experiência",
+    fullTitle: "Contratos de experiência 45/90 dias",
     owner: "RH",
     status: "7 a vencer",
     sensitivity: "Gestão",
     receives: false,
-    description: "Alerta para RH e liderança antes do fim da experiência.",
+    description: "Cadastro, decisão e alerta dos vencimentos de contrato de experiência.",
     formFields: [
       ["Colaborador", "employee"],
       ["Modalidade", "select:45 dias|45 + 45 dias|90 dias|Outro"],
       ["Admissão", "date"],
       ["Fim previsto", "date"],
-      ["Parecer", "select:Pendente|Renovar|Efetivar|Encerrar contrato"],
+      ["Parecer", "select:Pendente|Prorrogar|Efetivar|Encerrar contrato"],
+      ["Documento/parecer", "file"],
     ],
-    history: [["Experiência a vencer", "Maria Eduarda", "Alerta para RH e liderança"]],
+    history: [["Contrato de experiência a vencer", "Maria Eduarda", "Alerta para RH e liderança"]],
     executive: "Ver vencimentos próximos e decisões atrasadas.",
   },
   {
@@ -458,6 +459,26 @@ const peopleControlModules = [
     formFields: [["Colaborador", "employee"]],
     history: [["Evento registrado", "Todos os módulos", "Auditoria automática"]],
     executive: "Ver trilha resumida quando houver aprovação ou risco.",
+  },
+  {
+    key: "other",
+    title: "Outros controles",
+    fullTitle: "Outros controles operacionais do RH",
+    owner: "RH",
+    status: "Registro livre",
+    sensitivity: "Operacional",
+    receives: false,
+    description: "Lançamentos administrativos que ainda não têm módulo próprio.",
+    formFields: [
+      ["Colaborador", "employee"],
+      ["Tipo de controle", "text:Ex.: advertência operacional, entrega pendente, observação administrativa"],
+      ["Data", "date"],
+      ["Status", "select:Pendente|Em acompanhamento|Regularizado|Arquivado"],
+      ["Observação", "text:Descreva o que o RH precisa acompanhar"],
+      ["Documento", "file"],
+    ],
+    history: [["Acompanhamento administrativo", "Equipe RH", "Registro livre disponível"]],
+    executive: "Ver controles excepcionais e pendências sem módulo específico.",
   },
 ];
 
@@ -553,13 +574,17 @@ const state = {
   formMessage: "",
   peopleControlActiveModule: "aso",
   peopleControlMessage: "",
+  rhTaskMessage: "",
   vacationMessage: "",
   pointMessage: "",
   pointAdjustmentOpen: false,
   authMode: "login",
   authMessage: "",
-  authSession: safeJsonParse(localStorage.getItem("rhAuthSession"), null),
-  authResetQueue: safeJsonParse(localStorage.getItem("rhPasswordResetQueue"), []),
+  authSession: null,
+  authChecked: false,
+  authUser: null,
+  authProfile: null,
+  authResetQueue: [],
   authPendingEmployeeId: "",
   dataStatus: supabaseClient ? "Conectando ao Supabase..." : "Modo local",
 };
@@ -1022,54 +1047,6 @@ function simplePasswordHash(value) {
   return `local-${(hash >>> 0).toString(16)}`;
 }
 
-function authStore() {
-  return safeJsonParse(localStorage.getItem("rhAuthUsers"), {});
-}
-
-function saveAuthStore(store) {
-  localStorage.setItem("rhAuthUsers", JSON.stringify(store));
-}
-
-function resetQueueStore() {
-  const storedRows = safeJsonParse(localStorage.getItem("rhPasswordResetQueue"), []);
-  if (!Array.isArray(state.authResetQueue) || (!state.authResetQueue.length && storedRows.length)) {
-    state.authResetQueue = storedRows;
-  }
-  const seen = new Set();
-  const uniqueRows = (state.authResetQueue || [])
-    .filter((row) => row?.cpf && row?.temporaryPassword)
-    .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
-    .filter((row) => {
-      const key = digitsOnly(row.cpf);
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-  if (uniqueRows.length !== (state.authResetQueue || []).length) saveResetQueueStore(uniqueRows);
-  return uniqueRows;
-}
-
-function saveResetQueueStore(rows) {
-  state.authResetQueue = rows;
-  localStorage.setItem("rhPasswordResetQueue", JSON.stringify(rows));
-}
-
-function authRecordForEmployee(employee) {
-  const cpf = employeeLoginCpf(employee);
-  const store = authStore();
-  if (!store[cpf]) {
-    store[cpf] = {
-      employeeId: employee?.dbId || employee?.id || "",
-      passwordHash: simplePasswordHash(formatBirthPassword(employee?.birthDate)),
-      mustChange: true,
-      temporary: true,
-      updatedAt: new Date().toISOString(),
-    };
-    saveAuthStore(store);
-  }
-  return store[cpf];
-}
-
 function findEmployeeByCpf(cpf) {
   const normalized = digitsOnly(cpf).padStart(11, "0").slice(-11);
   const explicitMatch = employees.find((employee) => {
@@ -1088,21 +1065,37 @@ function findEmployeeByCpf(cpf) {
   return employees.find((employee) => employeeLoginCpf(employee) === normalized) || null;
 }
 
-function applyAuthenticatedEmployee(employee) {
-  const profile = simulatedProfileForEmployee(employee);
+function appProfileFromRoleCode(roleCode) {
+  const normalized = normalizeText(roleCode);
+  if (["rh", "hr", "rh_admin", "admin"].includes(normalized)) return "RH";
+  if (["diretoria", "director", "executive"].includes(normalized)) return "Diretoria";
+  if (["gestor", "gerente", "manager"].includes(normalized)) return "Gerente";
+  if (["supervisor", "lider", "leader"].includes(normalized)) return "Supervisor";
+  return "Colaborador";
+}
+
+function applyAuthenticatedProfile({ user, profile, employee } = {}) {
+  const roleCode = profile?.role_code || user?.user_metadata?.role_code || "colaborador";
+  const appProfile = appProfileFromRoleCode(roleCode);
+  const employeeRecord = employee || employees.find((item) => item.dbId === profile?.employee_id || normalizeText(item.email) === normalizeText(profile?.email || user?.email));
+  const fallbackProfile = simulatedProfiles[appProfile] || simulatedProfiles.Colaborador;
   Object.assign(currentUser, {
-    name: employee.name,
-    profile,
-    company: employee.company || "Todas",
-    department: employee.department || "Sem setor",
-    role: employee.role || "",
-    scope: simulatedProfiles[profile]?.scope || "self",
+    name: profile?.full_name || employeeRecord?.name || user?.user_metadata?.full_name || user?.email || fallbackProfile.name,
+    profile: appProfile,
+    company: employeeRecord?.company || fallbackProfile.company || "Todas",
+    department: employeeRecord?.department || fallbackProfile.department || "Sem setor",
+    role: employeeRecord?.role || roleCode || "",
+    scope: fallbackProfile.scope || "self",
     homePage: "portal",
-    cpf: employeeLoginCpf(employee),
-    birthDate: employee.birthDate || "",
+    cpf: employeeRecord ? employeeLoginCpf(employeeRecord) : "",
+    birthDate: employeeRecord?.birthDate || "",
+    authUserId: user?.id || profile?.auth_user_id || profile?.id || "",
+    email: profile?.email || user?.email || employeeRecord?.email || "",
   });
-  state.activeProfile = profile;
-  state.simulatedPerson = employee.name;
+  state.activeProfile = appProfile;
+  state.simulatedPerson = currentUser.name;
+  state.authUser = user || null;
+  state.authProfile = profile || null;
   state.formMessage = "";
   state.vacationMessage = "";
   state.pointMessage = "";
@@ -1114,39 +1107,92 @@ function applyAuthenticatedEmployee(employee) {
   }
 }
 
-function restoreAuthSession() {
-  const session = state.authSession || safeJsonParse(localStorage.getItem("rhAuthSession"), null);
-  if (!session?.cpf) return null;
-  const employee = findEmployeeByCpf(session.cpf);
-  if (!employee) {
-    localStorage.removeItem("rhAuthSession");
-    state.authSession = null;
-    return null;
+async function loadAuthProfile(session) {
+  if (!supabaseClient || !session?.user) return null;
+  const { data: profile } = await supabaseClient
+    .from("hr_profiles")
+    .select("*")
+    .or(`id.eq.${session.user.id},auth_user_id.eq.${session.user.id}`)
+    .maybeSingle();
+  let employee = null;
+  if (profile?.employee_id) {
+    employee = employees.find((item) => item.dbId === profile.employee_id) || null;
+    if (!employee) {
+      const { data: employeeRow } = await supabaseClient
+        .from("hr_employee_directory")
+        .select("*")
+        .eq("id", profile.employee_id)
+        .maybeSingle();
+      if (employeeRow) {
+        employee = {
+          id: employeeRow.employee_code || employeeRow.id,
+          dbId: employeeRow.id,
+          name: employeeRow.full_name || employeeRow.preferred_name || "Colaborador",
+          company: employeeRow.company_name || "Todas",
+          department: employeeRow.department_name || "Sem setor",
+          role: employeeRow.position_name || "",
+          manager: employeeRow.manager_name || employeeRow.supervisor_name || "Sem líder",
+          status: mapEmployeeStatus(employeeRow.status),
+          admission: formatDate(employeeRow.admission_date),
+          cpf: employeeRow.cpf || "",
+          birthDate: employeeRow.birth_date || "",
+          email: employeeRow.email || "",
+          vacation: "Consultar",
+          timeBank: "Consultar",
+        };
+      }
+    }
   }
-  state.authSession = session;
-  applyAuthenticatedEmployee(employee);
-  return employee;
+  applyAuthenticatedProfile({ user: session.user, profile, employee });
+  return { profile, employee };
 }
 
-function currentAuthRecord() {
-  if (!state.authSession?.cpf) return null;
-  return authStore()[digitsOnly(state.authSession.cpf).padStart(11, "0").slice(-11)] || null;
+async function verificarSessao() {
+  if (!supabaseClient?.auth) {
+    state.authChecked = true;
+    return null;
+  }
+  const { data } = await supabaseClient.auth.getSession();
+  state.authSession = data?.session || null;
+  if (state.authSession) await loadAuthProfile(state.authSession);
+  state.authChecked = true;
+  return state.authSession;
+}
+
+async function loginWithCPF(cpf, senha) {
+  if (!supabaseClient?.auth) return { error: "Supabase Auth indisponível." };
+  const loginValue = String(cpf || "").trim();
+  const cpfLimpo = digitsOnly(loginValue);
+  let email = loginValue.includes("@") ? loginValue : "";
+  if (!email) {
+    const { data: emp, error: empError } = await supabaseClient
+      .from("hr_employees")
+      .select("email, full_name, id")
+      .or(`cpf.eq.${cpfLimpo},cpf.eq.${cpfLimpo.padStart(11, "0")}`)
+      .maybeSingle();
+    if (empError || !emp?.email) return { error: "CPF não encontrado no sistema." };
+    email = emp.email;
+  }
+  const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password: senha });
+  if (error) return { error: "Senha incorreta ou usuário sem acesso." };
+  state.authSession = data.session;
+  await loadAuthProfile(data.session);
+  return { session: data.session, user: data.user, perfil: state.authProfile };
+}
+
+async function logout() {
+  if (supabaseClient?.auth) await supabaseClient.auth.signOut();
+  state.authSession = null;
+  state.authUser = null;
+  state.authProfile = null;
+  state.authChecked = true;
+  state.authMode = "login";
+  state.authMessage = "Sessão encerrada.";
+  state.page = "portal";
 }
 
 function shouldForcePasswordChange() {
-  return Boolean(state.authSession?.cpf && currentAuthRecord()?.mustChange);
-}
-
-function shouldBypassAuthLocally() {
-  return window.location.protocol === "file:" || ["127.0.0.1", "localhost"].includes(window.location.hostname);
-}
-
-function restoreLocalAuthBypass() {
-  const profile = simulatedProfiles[state.activeProfile] || simulatedProfiles.RH;
-  Object.assign(currentUser, profile);
-  state.activeProfile = profile.profile;
-  applySimulationPerson(state.simulatedPerson || profile.name);
-  return { name: currentUser.name, localBypass: true };
+  return false;
 }
 
 function authMessageMarkup() {
@@ -1978,7 +2024,7 @@ function dashboard() {
   );
   const openRequests = scopedRequests.filter((request) => !["Concluído", "Reprovado"].includes(request.status)).length;
   const actionable = scopedRequests.filter((request) => canActOnRequest(request));
-  const passwordResetQueue = currentUser.profile === "RH" ? resetQueueStore() : [];
+  const passwordResetQueue = [];
   const pendingActionCount = actionable.length + passwordResetQueue.length;
   const statusCounts = requestLanes.map((lane) => [lane, scopedRequests.filter((request) => request.status === lane).length]);
   const shortcutCards = [
@@ -2279,11 +2325,11 @@ function employeeDetailPage() {
   const tabs = [
     ["ficha", "Ficha"],
     ["documentos", "Documentos"],
+    ["historico", "Histórico"],
     ["admissao", "Admissão"],
     ["ferias", "Férias"],
     ["ponto", "Ponto"],
     ["pacote", "Pacote mensal"],
-    ["linha", "Linha do tempo"],
   ];
 
   return `
@@ -2321,13 +2367,13 @@ function employeeDetailTab(employee) {
   const renderers = {
     ficha: () => employeeFicha(employee),
     documentos: () => employeeDocuments(employee),
+    historico: () => employeeHistory(employee),
     admissao: () => employeeAdmission(employee),
     ferias: () => employeeVacation(employee),
     ponto: () => employeeTime(employee),
     pacote: () => employeeAccounting(employee),
-    linha: () => employeeTimeline(employee),
   };
-  return renderers[state.detailTab]();
+  return (renderers[state.detailTab] || renderers.ficha)();
 }
 
 function employeeFicha(employee) {
@@ -2434,15 +2480,46 @@ function employeeAccounting(employee) {
     </div>`;
 }
 
-function employeeTimeline() {
+function employeeHistoryRows(employee) {
+  const rows = [
+    {
+      date: employee.admission || "Sem data",
+      title: "Admissão",
+      detail: `${employee.role || "Cargo não informado"} · ${employee.department || "Setor não informado"}`,
+    },
+    {
+      date: "Hoje",
+      title: "Situação cadastral",
+      detail: `${employee.status || "Sem status"} · ${employee.company || "Sem empresa"}`,
+    },
+    {
+      date: "Hoje",
+      title: "Férias",
+      detail: employee.vacation || "Sem programação importada",
+    },
+    {
+      date: "Hoje",
+      title: "Ponto / banco de horas",
+      detail: employee.timeBank || "Sem registro importado",
+    },
+  ];
+  const peopleEvents = peopleControlEventStore()
+    .filter((event) => isSamePerson(event.employeeName, employee.name))
+    .map((event) => ({
+      date: event.createdAt ? formatDate(event.createdAt) : "Hoje",
+      title: event.moduleTitle || "Controle RH",
+      detail: event.summary || "Evento lançado em Controles RH",
+    }));
+  return [...peopleEvents, ...rows];
+}
+
+function employeeHistory(employee) {
+  const rows = employeeHistoryRows(employee);
   return `
     <div class="card pad">
-      <div class="section-title"><div><h2>Linha do tempo do colaborador</h2><p>Eventos registrados nos processos do RH</p></div></div>
+      <div class="section-title"><div><h2>Histórico do colaborador</h2><p>Eventos funcionais, documentos, férias, ponto e controles lançados pelo RH</p></div>${statusPill(rows.length)}</div>
       <div class="timeline">
-        <div class="event"><time>Hoje</time><div><strong>Admissão concluída</strong><span>Documentação completa, ASO apto e checklist finalizado.</span></div></div>
-        <div class="event"><time>Hoje</time><div><strong>Férias programadas</strong><span>Período aprovado para 01/06/2027 a 30/06/2027.</span></div></div>
-        <div class="event"><time>Hoje</time><div><strong>Ponto fechado</strong><span>Banco de horas e ajuste de ponto validados.</span></div></div>
-        <div class="event"><time>Hoje</time><div><strong>Pacote mensal enviado</strong><span>Competência 05/2026 registrada como enviada.</span></div></div>
+        ${rows.map((row) => `<div class="event"><time>${escapeHtml(row.date)}</time><div><strong>${escapeHtml(row.title)}</strong><span>${escapeHtml(row.detail)}</span></div></div>`).join("")}
       </div>
     </div>`;
 }
@@ -3618,13 +3695,15 @@ function rhRoutinesPage() {
   const activeDone = activeCompany === "Todas" ? totalDone : countDone(activeCompany);
   const activeTotal = activeCompany === "Todas" ? totalSlots : routines.length;
   const pending = Math.max(activeTotal - activeDone, 0);
+  const taskRows = rhTasksForCompany(activeCompany);
+  const openTasks = taskRows.filter((task) => task.status !== "done").length;
 
   return `
     <div class="grid metrics">
       ${metric("Rotinas / importações", `${activeDone} de ${activeTotal}`, activeCompany === "Todas" ? "Consolidado das três empresas" : `Ciclo de ${activeCompany}`, "☑")}
       ${metric("Entradas com arquivo", routines.filter((routine) => routine.hasFile).length, "Itens que aceitam arrastar/selecionar", "⇩")}
       ${metric("Pendências", pending, "Ainda sem check neste ciclo", "!")}
-      ${metric("Auditoria", "Obrigatória", directorMode ? "Diretoria acompanha execução" : "Quem fez, quando fez e resultado", "◎")}
+      ${metric("Tarefas abertas", openTasks, "Rotina independente do RH", "□")}
     </div>
     <div class="company-switcher dashboard-company-switcher" style="margin-top:16px">
       <button class="company-chip dashboard-company-chip ${activeCompany === "Todas" ? "active" : ""}" data-routine-company="Todas"><strong>Consolidado</strong></button>
@@ -3633,6 +3712,7 @@ function rhRoutinesPage() {
     <div class="rh-routines-layout">
       <div>
         ${activeCompany === "Todas" ? consolidatedRoutineTable(routines, routineStatus, directorMode) : companyRoutineChecklist(routines, routineStatus, activeCompany, directorMode)}
+        ${rhTasksPanel(taskRows, directorMode)}
       </div>
       ${temporaryRoutinesPanel(directorMode)}
     </div>
@@ -3676,6 +3756,75 @@ function temporaryRoutineClosedStore() {
 
 function saveTemporaryRoutineClosedStore(store) {
   localStorage.setItem("rhTemporaryRoutineClosed", JSON.stringify(store));
+}
+
+function rhTaskStore() {
+  return safeJsonParse(localStorage.getItem("rhTasks"), []);
+}
+
+function saveRhTaskStore(tasks) {
+  localStorage.setItem("rhTasks", JSON.stringify(tasks.slice(0, 200)));
+}
+
+function rhTasksForCompany(companyKey) {
+  return rhTaskStore()
+    .filter((task) => companyKey === "Todas" || task.company === companyKey)
+    .sort((a, b) => String(a.status).localeCompare(String(b.status)) || String(a.dueDate || "").localeCompare(String(b.dueDate || "")));
+}
+
+function saveRhTask(form) {
+  const data = new FormData(form);
+  const tasks = rhTaskStore();
+  tasks.unshift({
+    id: `task-${Date.now()}`,
+    title: String(data.get("title") || "").trim(),
+    company: String(data.get("company") || state.company || "Todas"),
+    type: String(data.get("type") || "general"),
+    priority: String(data.get("priority") || "normal"),
+    dueDate: String(data.get("dueDate") || ""),
+    description: String(data.get("description") || "").trim(),
+    status: "pending",
+    createdBy: currentUser.name,
+    createdAt: new Date().toISOString(),
+  });
+  saveRhTaskStore(tasks);
+  state.rhTaskMessage = "Tarefa criada para acompanhamento do RH.";
+}
+
+function updateRhTaskStatus(taskId, status) {
+  const tasks = rhTaskStore().map((task) =>
+    task.id === taskId
+      ? { ...task, status, completedAt: status === "done" ? new Date().toISOString() : task.completedAt || null }
+      : task,
+  );
+  saveRhTaskStore(tasks);
+}
+
+function rhTasksPanel(tasks, directorMode) {
+  const companyOptions = ["Prodelar", "Colmob", "Servimec"];
+  return `<div class="card pad rh-tasks-panel" style="margin-top:16px">
+    <div class="section-title"><div><h2>Tarefas do RH</h2><p>Controle independente para atestados, contratos de experiência e demais pendências operacionais.</p></div>${statusPill(tasks.filter((task) => task.status !== "done").length)}</div>
+    ${state.rhTaskMessage ? `<div class="notice form-notice"><strong>Retorno</strong><p>${escapeHtml(state.rhTaskMessage)}</p></div>` : ""}
+    <form class="form-grid compact-task-form" data-rh-task-form>
+      <label class="form-field"><span>Tarefa</span><input name="title" required placeholder="Ex.: Avaliar experiência de 60 dias" ${directorMode ? "disabled" : ""} /></label>
+      <label class="form-field"><span>Empresa</span><select name="company" ${directorMode ? "disabled" : ""}>${companyOptions.map((company) => `<option ${state.company === company ? "selected" : ""}>${company}</option>`).join("")}</select></label>
+      <label class="form-field"><span>Tipo</span><select name="type" ${directorMode ? "disabled" : ""}><option value="medical_certificate">Atestado</option><option value="experience_contract">Contrato de experiência</option><option value="document">Documento</option><option value="payroll">Folha</option><option value="general">Outros controles</option></select></label>
+      <label class="form-field"><span>Prioridade</span><select name="priority" ${directorMode ? "disabled" : ""}><option value="normal">Normal</option><option value="high">Alta</option><option value="critical">Crítica</option><option value="low">Baixa</option></select></label>
+      <label class="form-field"><span>Prazo</span><input name="dueDate" type="date" ${directorMode ? "disabled" : ""} /></label>
+      <label class="form-field full"><span>Observação</span><textarea name="description" rows="2" placeholder="Contexto, responsável ou documento relacionado" ${directorMode ? "disabled" : ""}></textarea></label>
+      <div class="form-actions full"><button class="btn primary" type="submit" ${directorMode ? "disabled" : ""}>Criar tarefa</button></div>
+    </form>
+    <div class="doc-list rh-task-list">
+      ${
+        tasks.length
+          ? tasks.map((task) => `<div class="doc rh-task-item">
+              <div><strong>${escapeHtml(task.title)}</strong><span>${escapeHtml(task.company)} · ${escapeHtml(task.type)} · ${task.dueDate ? formatDate(task.dueDate) : "Sem prazo"} · ${escapeHtml(task.createdBy || "RH")}</span>${task.description ? `<br><span>${escapeHtml(task.description)}</span>` : ""}</div>
+              <div class="task-actions">${statusPill(task.status === "done" ? "Concluído" : task.status === "in_progress" ? "Em execução" : "Pendente")}<button class="btn small" data-rh-task-status="${task.id}" data-status="${task.status === "done" ? "pending" : "done"}" ${directorMode ? "disabled" : ""}>${task.status === "done" ? "Reabrir" : "Concluir"}</button></div>
+            </div>`).join("")
+          : `<div class="empty">Nenhuma tarefa criada para este filtro.</div>`
+      }
+    </div>
+  </div>`;
 }
 
 function temporaryRhRoutines() {
@@ -4099,6 +4248,7 @@ function hierarchyPage() {
       ${metric("Diretoria direta", directored.length, "Respondem a Carlos/Anderson", "◇")}
       ${metric("Sem líder", withoutLeader.length, "Revisar vínculo", "!")}
     </div>
+    ${visualOrgChart(leaders, withoutLeader)}
     <div class="card table-wrap hierarchy-card" style="margin-top:16px">
       <div class="section-title table-title"><div><h2>Pendências de liderança</h2><p>Primeiro ajuste: quem está sem líder aparece aqui até receber um vínculo.</p></div>${statusPill(`${withoutLeader.length} pendente(s)`)}</div>
       <table>
@@ -4169,7 +4319,31 @@ function hierarchyPage() {
         </tbody>
       </table>
     </div>
-    `;
+	    `;
+}
+
+function visualOrgChart(leaders, withoutLeader) {
+  const activeLeaders = leaders.filter((leader) => leader.directReports.length).slice(0, 18);
+  return `<div class="card pad org-chart-card" style="margin-top:16px">
+    <div class="section-title"><div><h2>Organograma visual</h2><p>Estrutura por gestor imediato, construída a partir do vínculo de liderança cadastrado.</p></div>${statusPill(`${activeLeaders.length} nós`)}</div>
+    <div class="org-chart">
+      <div class="org-root"><strong>Diretoria</strong><span>Grupo Prodelar</span></div>
+      <div class="org-branches">
+        ${
+          activeLeaders.length
+            ? activeLeaders.map((leader) => `<div class="org-node">
+                <div class="org-leader"><strong>${escapeHtml(leader.name)}</strong><span>${escapeHtml(leader.role)} · ${escapeHtml(leader.company)}</span></div>
+                <div class="org-team">
+                  ${leader.directReports.slice(0, 10).map((employee) => `<span>${escapeHtml(employee.name)}<small>${escapeHtml(employee.department || "Sem setor")}</small></span>`).join("")}
+                  ${leader.directReports.length > 10 ? `<span>+${leader.directReports.length - 10} colaboradores<small>Equipe direta</small></span>` : ""}
+                </div>
+              </div>`).join("")
+            : `<div class="empty">Nenhum vínculo de liderança para desenhar neste filtro.</div>`
+        }
+      </div>
+      ${withoutLeader.length ? `<div class="org-alert">${withoutLeader.length} colaborador(es) sem líder definido.</div>` : ""}
+    </div>
+  </div>`;
 }
 
 function peopleControlEventStore() {
@@ -4248,13 +4422,13 @@ function savePeopleControlEvent(moduleKey) {
     by: currentUser.name,
     at: new Date().toISOString(),
     status: sensitivity.includes("sensível") || sensitivity.includes("restrito") ? "Aguardando revisão RH" : "Registrado",
-    outputs: "Alerta + aviso no app + e-mail + linha do tempo",
+    outputs: "Controle RH + linha do tempo funcional",
     values,
     fileName,
     summary,
   };
   savePeopleControlEventStore([entry, ...peopleControlEventStore()]);
-  state.peopleControlMessage = `${module.title} registrado para ${employeeName}. ${summary ? `${summary}. ` : ""}Alerta, aviso no app/e-mail e linha do tempo foram criados em modo teste.`;
+  state.peopleControlMessage = `${module.title} registrado para ${employeeName}. ${summary ? `${summary}. ` : ""}Lançamento salvo na rotina de Controles RH e vinculado à linha do tempo em modo teste.`;
   renderPage();
 }
 
@@ -4267,7 +4441,7 @@ function viewPeopleControlEvent(eventId) {
   }
   state.peopleControlActiveModule = event.moduleKey || state.peopleControlActiveModule;
   const details = event.summary ? ` Detalhes: ${event.summary}.` : "";
-  state.peopleControlMessage = `${event.moduleTitle}: ${event.employeeName} · ${event.status} · ${formatDateTime(event.at)}.${details} ${event.outputs || "Linha do tempo registrada."}`;
+  state.peopleControlMessage = `${event.moduleTitle}: ${event.employeeName} · ${event.status} · ${formatDateTime(event.at)}.${details} ${event.outputs || "Controle RH registrado."}`;
   renderPage();
 }
 
@@ -4330,32 +4504,46 @@ function peopleControlsPage() {
   });
   const storedEvents = peopleControlEventStore();
   const pendingReceived = peopleControlModules.reduce((total, module) => total + (module.receivedRows?.length || 0), 0);
+  const modulesWithFile = peopleControlModules.filter((module) => module.formFields?.some(([, type]) => type === "file")).length;
   return `
     ${["RH", "Diretoria"].includes(currentUser.profile) ? companySwitcher(activeCompany, "people-control-company") : lockedCompanyIndicator(activeCompany)}
     ${state.peopleControlMessage ? `<div class="notice" style="margin-top:16px"><strong>Retorno</strong><p>${state.peopleControlMessage}</p></div>` : ""}
+    <div class="card pad people-control-workbench" style="margin-top:16px">
+      <div class="section-title">
+        <div>
+          <h2>Controles operacionais do RH</h2>
+          <p>Rotina própria para lançar atestados, ASO, contratos de experiência, treinamentos, EPI, benefícios, comunicados e outros controles administrativos.</p>
+        </div>
+        ${statusPill("Rotina RH")}
+      </div>
+      <div class="notice muted-notice">
+        <strong>Independente do Meu portal</strong>
+        <p>Esta tela é do RH. O portal do colaborador apenas consulta ou envia solicitações quando existir fluxo liberado; os lançamentos, validações e acompanhamentos ficam aqui.</p>
+      </div>
+    </div>
     <div class="grid metrics" style="margin-top:16px">
-      ${metric("Alertas críticos", executiveAlerts.length, "ASO, férias, afastamentos e experiência", "!", "peopleControls")}
-      ${metric("Dados sensíveis", restrictedModules.length, "Exigem revisão do RH quando aplicável", "▣", "peopleControls")}
-      ${metric("Pendências recebidas", pendingReceived, "Atestado, benefício e certificado enviados ao RH", "↧", "peopleControls")}
-      ${metric("Eventos registrados", storedEvents.length, "Últimos lançamentos da vida funcional", "◎", "peopleControls")}
+      ${metric("Alertas críticos", executiveAlerts.length, "ASO, afastamentos e contratos vencendo", "!", "peopleControls")}
+      ${metric("Módulos com documento", modulesWithFile, "Lançamentos com anexo ou termo", "▣", "peopleControls")}
+      ${metric("Pendências do RH", pendingReceived, "Itens recebidos para validação interna", "↧", "peopleControls")}
+      ${metric("Eventos registrados", storedEvents.length, "Histórico local desta rotina", "◎", "peopleControls")}
     </div>
     <div class="card pad" style="margin-top:16px">
       <div class="section-title">
-        <div><h2>Entrada operacional do RH</h2><p>Escolha um módulo. O painel abre abaixo com pendências, novo lançamento e histórico.</p></div>
+        <div><h2>Módulos de controle</h2><p>Escolha o controle que o RH precisa lançar ou acompanhar. O formulário operacional abre abaixo.</p></div>
         ${statusPill(directorMode ? "Visão diretoria" : "RH")}
       </div>
       <div class="status-strip">
         ${peopleControlModules
           .map(
             (module) => `<button class="status-card people-control-module-card ${activeModule.key === module.key ? "active" : ""}" type="button" data-people-control-module="${module.key}">
-              <strong>${module.title}</strong><span>${module.status}</span><em>${activeModule.key === module.key ? "Painel aberto" : "Abrir painel"}</em>
+              <strong>${module.title}</strong><span>${module.status}</span><em>${activeModule.key === module.key ? "Controle aberto" : "Abrir controle"}</em>
             </button>`,
           )
           .join("")}
       </div>
       <div class="notice muted-notice" style="margin-top:14px">
-        <strong>Regra fixa</strong>
-        <p>Todo lançamento gera alerta, aviso no app, e-mail operacional e evento na linha do tempo do colaborador. Depois refinamos os destinatários e canais por template.</p>
+        <strong>Regra da rotina</strong>
+        <p>Todo lançamento fica vinculado ao colaborador, empresa, documento quando houver, status e linha do tempo funcional. Alertas e e-mails entram depois por template.</p>
       </div>
     </div>
     <div id="people-control-panel" class="card pad people-control-panel" style="margin-top:16px">
@@ -4631,41 +4819,30 @@ function timeline() {
 }
 
 function authPage() {
-  const isReset = state.authMode === "reset";
   return `
     <main class="auth-shell">
       <section class="auth-card">
         <img class="auth-logo" src="./assets/grupo-prodelar-logos.png" alt="Prodelar, Colmob e Servimec" loading="eager" decoding="async" />
         <div>
           <p class="eyebrow">Recursos Humanos</p>
-          <h1>${isReset ? "Resetar senha" : "Entrar no portal"}</h1>
-          <p>${isReset ? "Informe CPF e data de nascimento para gerar uma senha temporária para o RH entregar." : "Use seu CPF e a senha inicial no formato nascimento: DDMMAAAA."}</p>
+          <h1>Entrar no portal</h1>
+          <p>Use CPF cadastrado ou e-mail corporativo e a senha do Supabase Auth.</p>
         </div>
         ${authMessageMarkup()}
-        ${
-          isReset
-            ? `<form id="reset-form" class="auth-form">
-                <label><span>CPF</span><input name="cpf" inputmode="numeric" autocomplete="username" placeholder="Somente números" required /></label>
-                <label><span>Data de nascimento</span><input name="birthDate" type="date" required /></label>
-                <button class="btn primary" type="submit">Solicitar reset</button>
-                <button class="btn ghost" type="button" data-auth-mode="login">Voltar ao login</button>
-              </form>`
-            : `<form id="login-form" class="auth-form">
-                <label><span>CPF</span><input name="cpf" inputmode="numeric" autocomplete="username" placeholder="Somente números" required /></label>
-                <label><span>Senha</span><input name="password" type="password" autocomplete="current-password" placeholder="DDMMAAAA" required /></label>
-                <button class="btn primary" type="submit">Entrar</button>
-                <button class="btn ghost" type="button" data-auth-mode="reset">Esqueci minha senha</button>
-              </form>`
-        }
+        <form id="login-form" class="auth-form">
+          <label><span>CPF ou e-mail</span><input name="cpf" autocomplete="username" placeholder="CPF ou e-mail" required /></label>
+          <label><span>Senha</span><input name="password" type="password" autocomplete="current-password" placeholder="Senha" required /></label>
+          <button class="btn primary" type="submit">Entrar</button>
+        </form>
         <div class="auth-note">
-          <strong>Acesso inicial:</strong> quando o cadastro ainda não trouxer CPF ou nascimento real, use o acesso provisório. Ana Paula: CPF 00000000003, senha inicial 01011990.
+          <strong>Acesso de teste:</strong> use os usuários criados no Supabase Auth, como rh@teste.prodelar.
         </div>
       </section>
     </main>`;
 }
 
 function passwordChangePage() {
-  const employee = restoreAuthSession();
+  const employee = currentUser;
   return `
     <main class="auth-shell">
       <section class="auth-card">
@@ -4731,8 +4908,11 @@ const pageRenderers = {
 function renderPage() {
   ensureRuntimeIndexes();
   renderMemo = {};
-  const authenticatedEmployee = shouldBypassAuthLocally() ? restoreLocalAuthBypass() : restoreAuthSession();
-  if (!authenticatedEmployee) {
+  if (!state.authChecked) {
+    commitAppHtml(authPage(), bindAuth);
+    return;
+  }
+  if (!state.authSession) {
     commitAppHtml(authPage(), bindAuth);
     return;
   }
@@ -5065,6 +5245,7 @@ function handleDelegatedAppClick(event, appRoot) {
       "[data-routine-mark]",
       "[data-routine-execute]",
       "[data-temporary-routine-close]",
+      "[data-rh-task-status]",
       "[data-show-more]",
       "[data-employee]",
       "[data-employee-company]",
@@ -5112,6 +5293,10 @@ function handleDelegatedAppClick(event, appRoot) {
     target.disabled = true;
     target.textContent = "Verificando...";
     executeRoutineFolderCheck(dataset.routineExecute).then(renderPage);
+  } else if (dataset.rhTaskStatus !== undefined) {
+    updateRhTaskStatus(dataset.rhTaskStatus, dataset.status || "done");
+    state.rhTaskMessage = dataset.status === "done" ? "Tarefa concluída." : "Tarefa reaberta.";
+    renderPage();
   } else if (dataset.routineCompany !== undefined && dataset.routineUpload === undefined && dataset.routineDrop === undefined) {
     state.company = dataset.routineCompany || state.company;
     renderPage();
@@ -5212,12 +5397,7 @@ function handleDelegatedAppClick(event, appRoot) {
     markOperationalAction(dataset.operationalScope, dataset.operationalKey, dataset.operationalLabel || "Item registrado e removido da fila operacional.");
   } else if (dataset.action !== undefined) {
     if (dataset.action === "logout") {
-      localStorage.removeItem("rhAuthSession");
-      state.authSession = null;
-      state.authMode = "login";
-      state.authMessage = "Sessão encerrada.";
-      state.page = "portal";
-      renderPage();
+      logout().then(renderPage);
     } else if (dataset.action === "refresh") {
       loadSupabaseData();
     } else if (dataset.action === "new-request") {
@@ -5297,48 +5477,25 @@ function handleDelegatedAppClick(event, appRoot) {
 }
 
 function bindAuth() {
-  document.querySelectorAll("[data-auth-mode]").forEach((button) => {
-    button.addEventListener("click", () => {
-      state.authMode = button.dataset.authMode || "login";
-      state.authMessage = "";
-      renderPage();
-    });
-  });
-
   document.querySelectorAll("[data-action='logout']").forEach((button) => {
     button.addEventListener("click", () => {
-      localStorage.removeItem("rhAuthSession");
-      state.authSession = null;
-      state.authMode = "login";
-      state.authMessage = "Sessão encerrada.";
-      state.page = "portal";
-      renderPage();
+      logout().then(renderPage);
     });
   });
 
   const loginForm = document.querySelector("#login-form");
   if (loginForm) {
-    loginForm.addEventListener("submit", (event) => {
+    loginForm.addEventListener("submit", async (event) => {
       event.preventDefault();
       const form = new FormData(loginForm);
-      const cpf = digitsOnly(form.get("cpf")).padStart(11, "0").slice(-11);
-      const employee = findEmployeeByCpf(cpf);
-      if (!employee) {
-        state.authMessage = "CPF não encontrado no cadastro de colaboradores.";
+      const result = await loginWithCPF(form.get("cpf"), form.get("password"));
+      if (result?.error) {
+        state.authMessage = result.error;
         renderPage();
         return;
       }
-      const record = authRecordForEmployee(employee);
-      if (record.passwordHash !== simplePasswordHash(form.get("password"))) {
-        state.authMessage = "Senha inválida. A senha inicial é a data de nascimento no formato DDMMAAAA.";
-        renderPage();
-        return;
-      }
-      state.authSession = { cpf, employeeId: employee.dbId || employee.id, at: new Date().toISOString() };
-      localStorage.setItem("rhAuthSession", JSON.stringify(state.authSession));
-      applyAuthenticatedEmployee(employee);
-      state.page = "portal";
-      state.authMessage = record.mustChange ? "" : `Bem-vindo(a), ${employee.name}.`;
+      state.page = currentUser.homePage || "portal";
+      state.authMessage = `Bem-vindo(a), ${currentUser.name}.`;
       renderPage();
     });
   }
@@ -5347,76 +5504,8 @@ function bindAuth() {
   if (passwordForm) {
     passwordForm.addEventListener("submit", (event) => {
       event.preventDefault();
-      const form = new FormData(passwordForm);
-      const password = String(form.get("password") || "");
-      const confirm = String(form.get("confirm") || "");
-      if (password.length < 6) {
-        state.authMessage = "A senha precisa ter pelo menos 6 dígitos ou caracteres.";
-        renderPage();
-        return;
-      }
-      if (password !== confirm) {
-        state.authMessage = "As senhas não conferem.";
-        renderPage();
-        return;
-      }
-      const cpf = digitsOnly(state.authSession?.cpf).padStart(11, "0").slice(-11);
-      const store = authStore();
-      store[cpf] = {
-        ...(store[cpf] || {}),
-        passwordHash: simplePasswordHash(password),
-        mustChange: false,
-        temporary: false,
-        updatedAt: new Date().toISOString(),
-      };
-      saveAuthStore(store);
-      state.authMessage = "Senha alterada. Acesso liberado.";
+      state.authMessage = "A troca de senha agora deve ser feita pelo Supabase Auth.";
       state.page = "portal";
-      renderPage();
-    });
-  }
-
-  const resetForm = document.querySelector("#reset-form");
-  if (resetForm) {
-    resetForm.addEventListener("submit", (event) => {
-      event.preventDefault();
-      const form = new FormData(resetForm);
-      const cpf = digitsOnly(form.get("cpf")).padStart(11, "0").slice(-11);
-      const employee = findEmployeeByCpf(cpf);
-      if (!employee) {
-        state.authMessage = "CPF não encontrado no cadastro de colaboradores.";
-        renderPage();
-        return;
-      }
-      const informedBirth = formatBirthPassword(form.get("birthDate"));
-      const expectedBirth = formatBirthPassword(employee.birthDate);
-      if (informedBirth !== expectedBirth) {
-        state.authMessage = "Data de nascimento não confere com o cadastro.";
-        renderPage();
-        return;
-      }
-      const temporaryPassword = String(Math.floor(100000 + Math.random() * 900000));
-      const store = authStore();
-      store[cpf] = {
-        ...(store[cpf] || {}),
-        employeeId: employee.dbId || employee.id,
-        passwordHash: simplePasswordHash(temporaryPassword),
-        mustChange: true,
-        temporary: true,
-        updatedAt: new Date().toISOString(),
-      };
-      saveAuthStore(store);
-      const queue = resetQueueStore();
-      queue.unshift({
-        employeeName: employee.name,
-        cpf,
-        temporaryPassword,
-        target: "Ana Paula - RH",
-        createdAt: new Date().toISOString(),
-      });
-      saveResetQueueStore(queue.slice(0, 50));
-      state.authMode = "login";
-      state.authMessage = "Senha temporária criada para Ana Paula do RH entregar. No próximo acesso, será obrigatório trocar a senha.";
       renderPage();
     });
   }
@@ -5533,6 +5622,13 @@ function bind() {
       const file = event.dataTransfer?.files?.[0];
       if (!file) return;
       setRoutineFile(dropzone.dataset.routineCompany, dropzone.dataset.routineDrop, file);
+      renderPage();
+    });
+  });
+  document.querySelectorAll("[data-rh-task-form]").forEach((form) => {
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      saveRhTask(form);
       renderPage();
     });
   });
@@ -6018,4 +6114,31 @@ clearOldRoutineTestData();
 clearSampleDataForSupabaseBoot();
 const bootedFromCache = hydrateRuntimeDataCache();
 renderPage();
+verificarSessao()
+  .then(() => renderPage())
+  .catch((error) => {
+    console.error("Erro ao verificar sessao Supabase Auth", error);
+    state.authChecked = true;
+    state.authMessage = "Não foi possível verificar a sessão no Supabase.";
+    renderPage();
+  });
+if (supabaseClient?.auth) {
+  supabaseClient.auth.onAuthStateChange((event, session) => {
+    if (event === "SIGNED_OUT") {
+      state.authSession = null;
+      state.authUser = null;
+      state.authProfile = null;
+      state.authChecked = true;
+      state.page = "portal";
+      renderPage();
+      return;
+    }
+    if (session?.access_token !== state.authSession?.access_token) {
+      state.authSession = session || null;
+      state.authChecked = true;
+      if (session) loadAuthProfile(session).then(renderPage);
+      else renderPage();
+    }
+  });
+}
 scheduleFreshDataLoad(bootedFromCache ? 1500 : 0);
