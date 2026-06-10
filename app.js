@@ -585,7 +585,9 @@ const state = {
   rhTaskTypeFilter: "all",
   rhTaskEditId: "",
   rhRoutineCompetence: "",
+  rhRoutineMessage: "",
   rhRoutineHistoryOpen: false,
+  rhTemporaryModalOpen: false,
   vacationMessage: "",
   pointMessage: "",
   pointAdjustmentOpen: false,
@@ -4318,6 +4320,433 @@ function temporaryRoutinesPanel(directorMode) {
   </div>`;
 }
 
+function routineSelectedCompany(value = state.company || "Todas") {
+  if (!value || value === "Todas") return "Todas";
+  const found = companies.find((company) => normalizeText(company.key) === normalizeText(value) || normalizeText(company.code) === normalizeText(value) || normalizeText(company.label) === normalizeText(value));
+  return found?.key || value;
+}
+
+function routineCompanyKeys(activeCompany = state.company || "Todas") {
+  const selected = routineSelectedCompany(activeCompany);
+  return selected === "Todas" ? companies.map((company) => company.key) : [selected];
+}
+
+function routineCompanyId(companyKey) {
+  const selected = routineSelectedCompany(companyKey);
+  const map = {
+    Prodelar: "facacbbd-88d5-4d64-8bee-b539b9613aa1",
+    Colmob: "ca8e758e-ee0e-4980-85cc-d36feb13330f",
+    Servimec: "7553b188-d622-42ef-a353-46a87b500a79",
+  };
+  return map[selected] || null;
+}
+
+function routineCategoryItems(category) {
+  const imports = [
+    { key: "registration_cards", title: "Fichas funcionais", folder: "Importações/Fichas funcionais" },
+    { key: "vacation_forecasts", title: "Previsão de férias", folder: "Importações/Previsão de férias" },
+    { key: "paystubs", title: "Contracheques", folder: "Importações/Contracheques" },
+    { key: "gross_payroll", title: "Folha bruta", folder: "Importações/Folha bruta" },
+  ];
+  const monthly = [
+    { key: "vacation_calc", title: "Cálculo de férias" },
+    { key: "payroll_calc", title: "Cálculo de folha" },
+    { key: "monthly_point", title: "Fechamento mensal de ponto" },
+    { key: "accounting_package", title: "Pacote mensal para contabilidade" },
+    { key: "people_controls", title: "Registro ASO/atestados/afastamentos" },
+    { key: "training_equipment", title: "Treinamento EPIs e equipamentos" },
+    { key: "communications_zoom", title: "Comunicados e zoom" },
+    { key: "benefits_calc", title: "Cálculo de benefícios" },
+  ];
+  return category === "imports" ? imports : monthly;
+}
+
+monthlyRhRoutines = function monthlyRhRoutines() {
+  return [...routineCategoryItems("imports"), ...routineCategoryItems("monthly")].map((item) => ({
+    ...item,
+    hasFile: routineCategoryItems("imports").some((routine) => routine.key === item.key),
+    description: item.folder || "Rotina mensal de conferência e execução do RH.",
+    folder: item.folder || "Rotinas",
+  }));
+};
+
+function routineDoneForCompany(companyKey, routineKey, competence = routineCompetence()) {
+  return Boolean(rhRoutineStatusStore()[rhRoutineKey(companyKey, routineKey, competence)]?.done);
+}
+
+function routineCategoryStats(category, activeCompany = state.company || "Todas", competence = routineCompetence()) {
+  const keys = routineCompanyKeys(activeCompany);
+  const items = routineCategoryItems(category);
+  const total = keys.length * items.length;
+  const done = keys.reduce((sum, companyKey) => sum + items.filter((item) => routineDoneForCompany(companyKey, item.key, competence)).length, 0);
+  return { done, total };
+}
+
+function routineTemporaryStore() {
+  return safeJsonParse(localStorage.getItem("rhTemporaryRoutines"), []);
+}
+
+function saveRoutineTemporaryStore(rows) {
+  localStorage.setItem("rhTemporaryRoutines", JSON.stringify(rows.slice(0, 300)));
+}
+
+function routineMonthHistoryStore() {
+  return safeJsonParse(localStorage.getItem("rhRoutineMonthHistory"), []);
+}
+
+function saveRoutineMonthHistoryStore(rows) {
+  localStorage.setItem("rhRoutineMonthHistory", JSON.stringify(rows.slice(0, 80)));
+}
+
+function openTemporaryRoutineRows(activeCompany = state.company || "Todas") {
+  return routineTemporaryStore()
+    .filter((item) => activeCompany === "Todas" || item.company === activeCompany)
+    .filter((item) => item.status !== "done" && item.closedCompetence !== routineCompetence())
+    .sort((a, b) => String(a.dueDate || "").localeCompare(String(b.dueDate || "")));
+}
+
+function completedTemporaryRows(activeCompany = state.company || "Todas", competence = routineCompetence()) {
+  return routineTemporaryStore()
+    .filter((item) => activeCompany === "Todas" || item.company === activeCompany)
+    .filter((item) => item.status === "done" || item.closedCompetence === competence);
+}
+
+function routineAllGreen(activeCompany = state.company || "Todas", competence = routineCompetence()) {
+  const imports = routineCategoryStats("imports", activeCompany, competence);
+  const monthly = routineCategoryStats("monthly", activeCompany, competence);
+  const openTemporary = openTemporaryRoutineRows(activeCompany).length;
+  return imports.done === imports.total && monthly.done === monthly.total && openTemporary === 0;
+}
+
+rhRoutinesPage = function rhRoutinesPage() {
+  const activeCompany = routineSelectedCompany(state.company || "Todas");
+  const competence = routineCompetence();
+  const competenceLabel = routineCompetenceLabel(competence);
+  const imports = routineCategoryStats("imports", activeCompany, competence);
+  const monthly = routineCategoryStats("monthly", activeCompany, competence);
+  const openTemporary = openTemporaryRoutineRows(activeCompany).length;
+  const canCloseMonth = routineAllGreen(activeCompany, competence);
+  const directorMode = currentUser.profile === "Diretoria";
+
+  return `
+    ${state.rhRoutineMessage ? `<div class="notice form-notice"><strong>Retorno</strong><p>${escapeHtml(state.rhRoutineMessage)}</p></div>` : ""}
+    <div class="routine-topbar">
+      <div class="routine-company-tabs">
+        <button class="company-chip dashboard-company-chip ${activeCompany === "Todas" ? "active" : ""}" data-routine-company="Todas"><strong>Consolidado</strong></button>
+        ${companies.map((company) => `<button class="company-chip dashboard-company-chip logo-chip ${activeCompany === company.key ? "active" : ""}" data-routine-company="${company.key}">${companyLogo(company.key)}</button>`).join("")}
+      </div>
+      <div class="routine-period-bar compact-period">
+        <button class="btn small" data-routine-competence="prev">‹ Mês anterior</button>
+        <div><span>Competência</span><strong>${competenceLabel}</strong></div>
+        <button class="btn small" data-routine-competence="current">Mês atual</button>
+        <button class="btn small" data-routine-competence="next">Próximo mês ›</button>
+      </div>
+    </div>
+    <div class="grid metrics routine-summary">
+      ${metric("Importações", `${imports.done}/${imports.total}`, "Arquivos mensais", "⇩")}
+      ${metric("Rotinas mensais", `${monthly.done}/${monthly.total}`, "Checks operacionais", "☑")}
+      ${metric("Rotinas temporárias", `${openTemporary} abertas`, "Demandas avulsas RH", "□")}
+    </div>
+    <div class="routine-board-three">
+      ${routineImportsColumn(activeCompany, directorMode, competence)}
+      ${routineMonthlyColumn(activeCompany, directorMode, competence)}
+      ${routineTemporaryColumn(activeCompany, directorMode)}
+    </div>
+    ${
+      canCloseMonth
+        ? `<div class="routine-close-month"><button class="btn primary" data-routine-close-month>Fechar mês ${escapeHtml(competenceLabel)}</button></div>`
+        : `<div class="notice muted-notice routine-close-hint"><strong>Fechamento bloqueado</strong><p>O botão de fechar mês aparece quando importações, rotinas mensais e temporárias estiverem verdes.</p></div>`
+    }
+    ${routineHistoryPanel(rhRoutineStatusStore(), monthlyRhRoutines(), activeCompany, competence)}
+    ${state.rhTemporaryModalOpen ? temporaryRoutineModal(activeCompany) : ""}`;
+};
+
+function routineImportsColumn(activeCompany, directorMode, competence) {
+  const keys = routineCompanyKeys(activeCompany);
+  const ready = routineCategoryStats("imports", activeCompany, competence);
+  return `<section class="routine-column">
+    <div class="routine-column-title"><div><h2>Importações mensais</h2><p>Arquivos recebidos por competência.</p></div>${statusPill(`${ready.done}/${ready.total}`)}</div>
+    <div class="routine-card-list">
+      ${routineCategoryItems("imports").map((item) => routineImportItem(item, keys, directorMode, competence)).join("")}
+    </div>
+    <button class="btn primary" data-routine-execute-imports ${directorMode ? "disabled" : ""}>Executar importações</button>
+  </section>`;
+}
+
+function routineImportItem(item, companyKeys, directorMode, competence) {
+  const doneCount = companyKeys.filter((companyKey) => routineDoneForCompany(companyKey, item.key, competence)).length;
+  const done = doneCount === companyKeys.length;
+  const activeCompany = companyKeys.length === 1 ? companyKeys[0] : "Todas";
+  return `<div class="routine-tile ${done ? "done" : "pending"}">
+    <div class="routine-tile-head"><strong>${escapeHtml(item.title)}</strong>${statusPill(done ? "Importado" : "Pendente")}</div>
+    <span>${escapeHtml(item.folder)}</span>
+    <label class="routine-file-picker ${done ? "done" : "pending"}" data-routine-drop="${item.key}" data-routine-company="${activeCompany}">
+      <input type="file" data-routine-upload="${item.key}" data-routine-company="${activeCompany}" ${directorMode ? "disabled" : ""} />
+      Arrastar arquivo ou selecionar
+    </label>
+  </div>`;
+}
+
+function routineMonthlyColumn(activeCompany, directorMode, competence) {
+  const keys = routineCompanyKeys(activeCompany);
+  const ready = routineCategoryStats("monthly", activeCompany, competence);
+  const allDone = ready.done === ready.total;
+  return `<section class="routine-column">
+    <div class="routine-column-title"><div><h2>Rotinas mensais</h2><p>Clique para marcar cada rotina executada.</p></div>${statusPill(`${ready.done}/${ready.total}`)}</div>
+    <div class="routine-card-list">
+      ${routineCategoryItems("monthly").map((item) => routineMonthlyItem(item, keys, directorMode, competence)).join("")}
+    </div>
+    <button class="btn primary" data-routine-execute-monthly ${directorMode || !allDone ? "disabled" : ""}>Executar rotinas mensais</button>
+  </section>`;
+}
+
+function routineMonthlyItem(item, companyKeys, directorMode, competence) {
+  const doneCount = companyKeys.filter((companyKey) => routineDoneForCompany(companyKey, item.key, competence)).length;
+  const done = doneCount === companyKeys.length;
+  const activeCompany = companyKeys.length === 1 ? companyKeys[0] : "Todas";
+  return `<button class="routine-tile button-tile ${done ? "done" : "pending"}" data-routine-mark="${item.key}" data-routine-company="${activeCompany}" ${directorMode ? "disabled" : ""}>
+    <div class="routine-tile-head"><strong>${escapeHtml(item.title)}</strong>${statusPill(done ? "Concluído" : "Pendente")}</div>
+    <span>${done ? "Verde nesta competência" : "Clique para marcar verde"}</span>
+  </button>`;
+}
+
+function routineTemporaryColumn(activeCompany, directorMode) {
+  const openRows = openTemporaryRoutineRows(activeCompany);
+  const closedRows = completedTemporaryRows(activeCompany);
+  return `<section class="routine-column">
+    <div class="routine-column-title"><div><h2>Rotinas temporárias</h2><p>Demandas criadas pelo RH fora do ciclo fixo.</p></div>${statusPill(`${openRows.length} abertas`)}</div>
+    <div class="routine-card-list">
+      ${
+        openRows.length
+          ? openRows.map((item) => temporaryRoutineItem(item, directorMode)).join("")
+          : `<div class="routine-tile done"><div class="routine-tile-head"><strong>Nenhuma rotina aberta</strong>${statusPill("Verde")}</div><span>Tudo concluído para este filtro.</span></div>`
+      }
+      ${closedRows.slice(0, 4).map((item) => temporaryRoutineItem(item, directorMode)).join("")}
+    </div>
+    <button class="btn" data-temporary-routine-new ${directorMode ? "disabled" : ""}>+ Nova rotina temporária</button>
+    <button class="btn primary" data-temporary-routine-execute ${directorMode || openRows.length ? "disabled" : ""}>Executar rotinas temporárias</button>
+  </section>`;
+}
+
+function temporaryRoutineItem(item, directorMode) {
+  const done = item.status === "done";
+  return `<div class="routine-tile ${done ? "done" : "pending"}">
+    <div class="routine-tile-head"><strong>${escapeHtml(item.title)}</strong>${statusPill(done ? "Concluído" : "Aberta")}</div>
+    <span>${escapeHtml(item.description || "Sem descrição")}</span>
+    <span>Prazo: ${item.dueDate ? formatDate(item.dueDate) : "Sem prazo"} · ${escapeHtml(item.company || "Todas")} · ${escapeHtml(item.owner || "RH")}</span>
+    ${done ? "" : `<button class="btn small primary" data-temporary-routine-close="${item.id}" ${directorMode ? "disabled" : ""}>Concluir</button>`}
+  </div>`;
+}
+
+function temporaryRoutineModal(activeCompany) {
+  return `<div class="modal-backdrop">
+    <form class="modal card pad temporary-routine-modal" id="temporary-routine-form">
+      <div class="section-title"><div><h2>Nova rotina temporária</h2><p>Crie uma demanda avulsa do RH para esta competência.</p></div><button class="btn small" type="button" data-temporary-routine-cancel>Fechar</button></div>
+      <div class="form-grid">
+        <label class="form-field full"><span>Título</span><input name="title" required placeholder="Ex.: Conferir contrato de experiência" /></label>
+        <label class="form-field full"><span>Descrição</span><textarea name="description" rows="3" placeholder="Contexto, documentos ou próximos passos"></textarea></label>
+        <label class="form-field"><span>Prazo</span><input name="dueDate" type="date" /></label>
+        <label class="form-field"><span>Empresa</span><select name="company">
+          ${["Prodelar", "Colmob", "Servimec"].map((company) => `<option value="${company}" ${activeCompany === company ? "selected" : ""}>${company}</option>`).join("")}
+        </select></label>
+        <label class="form-field full"><span>Responsável</span><input name="owner" value="${escapeHtml(currentUser.name || "RH")}" /></label>
+        <div class="form-actions full"><button class="btn primary" type="submit">Criar rotina</button></div>
+      </div>
+    </form>
+  </div>`;
+}
+
+async function persistRoutineExecution(companyKey, routineKey, routineName, status) {
+  if (!supabaseClient) return;
+  const companyId = routineCompanyId(companyKey);
+  if (!companyId) return;
+  const done = Boolean(status.done);
+  const payload = {
+    company_id: companyId,
+    competence_month: `${status.competence || routineCompetence()}-01`,
+    routine_key: routineKey,
+    routine_name: routineName,
+    status: done ? "processed" : status.fileName ? "file_selected" : "pending",
+    source_mode: status.source === "manual" ? "upload" : "manual",
+    original_file_name: status.fileName || null,
+    processed_by: state.authProfile?.id || null,
+    processed_at: done ? status.at || new Date().toISOString() : null,
+    last_error: status.error || null,
+    raw_result: {
+      done,
+      by: status.by || currentUser.name,
+      category: status.category || "monthly",
+      closedCompetence: status.closedCompetence || null,
+    },
+  };
+  const { error } = await supabaseClient.from("hr_monthly_routines").upsert(payload, {
+    onConflict: "company_id,competence_month,routine_key",
+  });
+  if (error) console.error("Erro ao persistir rotina mensal", error);
+}
+
+setRoutineStatus = function setRoutineStatus(companyKey, routineKey, status) {
+  const store = rhRoutineStatusStore();
+  const targets = routineCompanyKeys(companyKey);
+  const routine = monthlyRhRoutines().find((item) => item.key === routineKey) || { title: routineKey };
+  targets.forEach((targetCompany) => {
+    const row = {
+      ...status,
+      done: Boolean(status.done),
+      competence: routineCompetence(),
+      by: currentUser.name,
+      at: new Date().toISOString(),
+    };
+    store[rhRoutineKey(targetCompany, routineKey)] = row;
+    void persistRoutineExecution(targetCompany, routineKey, routine.title, row);
+  });
+  saveRhRoutineStatusStore(store);
+};
+
+setRoutineFile = function setRoutineFile(companyKey, routineKey, file) {
+  setRoutineStatus(companyKey, routineKey, {
+    done: true,
+    fileName: file.name,
+    source: "manual",
+    category: "imports",
+  });
+};
+
+executeRoutineFolderCheck = async function executeRoutineFolderCheck(companyKey) {
+  monthlyRhRoutines().forEach((routine) => {
+    if (!routine.hasFile) {
+      setRoutineStatus(companyKey, routine.key, {
+        done: true,
+        fileName: "Executado pelo painel",
+        source: "manual",
+        category: "monthly",
+      });
+    }
+  });
+};
+
+function markRoutineCategory(category, companyKey = state.company || "Todas") {
+  routineCategoryItems(category).forEach((routine) => {
+    setRoutineStatus(companyKey, routine.key, {
+      done: true,
+      fileName: category === "imports" ? "Importação executada pelo painel" : "Rotina executada pelo painel",
+      source: "manual",
+      category,
+    });
+  });
+  state.rhRoutineMessage = category === "imports" ? "Importações marcadas como executadas." : "Rotinas mensais executadas.";
+}
+
+function createTemporaryRoutineFromForm(form) {
+  const data = new FormData(form);
+  const item = {
+    id: `temp-${Date.now()}`,
+    title: String(data.get("title") || "").trim(),
+    description: String(data.get("description") || "").trim(),
+    dueDate: String(data.get("dueDate") || ""),
+    company: String(data.get("company") || state.company || "Prodelar"),
+    owner: String(data.get("owner") || currentUser.name || "RH").trim(),
+    competence: routineCompetence(),
+    status: "pending",
+    createdBy: currentUser.name,
+    createdAt: new Date().toISOString(),
+  };
+  const rows = routineTemporaryStore();
+  rows.unshift(item);
+  saveRoutineTemporaryStore(rows);
+  void persistRoutineExecution(item.company, `temporary::${item.id}`, item.title, {
+    done: false,
+    competence: item.competence,
+    category: "temporary",
+  });
+  state.rhTemporaryModalOpen = false;
+  state.rhRoutineMessage = "Rotina temporária criada.";
+}
+
+function closeTemporaryRoutine(id) {
+  const rows = routineTemporaryStore().map((item) =>
+    item.id === id || item.key === id
+      ? { ...item, status: "done", completedAt: new Date().toISOString(), completedBy: currentUser.name, closedCompetence: routineCompetence() }
+      : item,
+  );
+  saveRoutineTemporaryStore(rows);
+  const item = rows.find((row) => row.id === id || row.key === id);
+  if (item) {
+    void persistRoutineExecution(item.company || state.company || "Prodelar", `temporary::${item.id || item.key}`, item.title, {
+      done: true,
+      competence: routineCompetence(),
+      category: "temporary",
+      closedCompetence: routineCompetence(),
+    });
+  }
+  state.rhRoutineMessage = "Rotina temporária concluída.";
+}
+
+function executeTemporaryRoutines() {
+  state.rhRoutineMessage = "Rotinas temporárias executadas. Nenhuma pendência aberta neste filtro.";
+}
+
+function closeRoutineMonth() {
+  const activeCompany = state.company || "Todas";
+  const competence = routineCompetence();
+  if (!routineAllGreen(activeCompany, competence)) {
+    state.rhRoutineMessage = "Ainda existem itens pendentes para fechar o mês.";
+    return;
+  }
+  const imports = routineCategoryStats("imports", activeCompany, competence);
+  const monthly = routineCategoryStats("monthly", activeCompany, competence);
+  const history = routineMonthHistoryStore();
+  history.unshift({
+    id: `month-${Date.now()}`,
+    competence,
+    company: activeCompany,
+    status: "Fechado",
+    imports: `${imports.done}/${imports.total}`,
+    monthly: `${monthly.done}/${monthly.total}`,
+    closedBy: currentUser.name,
+    closedAt: new Date().toISOString(),
+  });
+  saveRoutineMonthHistoryStore(history);
+  state.rhRoutineCompetence = shiftMonthKey(competence, 1);
+  state.rhRoutineMessage = `Competência ${routineCompetenceLabel(competence)} fechada. Nova competência: ${routineCompetenceLabel(state.rhRoutineCompetence)}.`;
+}
+
+routineHistoryPanel = function routineHistoryPanel(_routineStatus, _routines, activeCompany, currentCompetence) {
+  const closedMonths = routineMonthHistoryStore().filter((row) => activeCompany === "Todas" || row.company === activeCompany);
+  const routineStatusRows = Object.entries(rhRoutineStatusStore())
+    .map(([key, status]) => {
+      const [competence, company, routineKey] = key.split("::");
+      if (!competence || competence === currentCompetence) return null;
+      if (activeCompany !== "Todas" && company !== activeCompany) return null;
+      return { key, competence, company, routineKey, status };
+    })
+    .filter(Boolean)
+    .slice(0, 60);
+  return `<div class="card pad routine-history-panel" style="margin-top:16px">
+    <div class="section-title">
+      <div><h2>Histórico</h2><p>Competências anteriores seguem consultáveis e podem ser editadas usando o seletor de mês.</p></div>
+      <button class="btn small" data-routine-history-toggle>${state.rhRoutineHistoryOpen ? "Ocultar" : "Mostrar"}</button>
+    </div>
+    ${
+      state.rhRoutineHistoryOpen
+        ? `<div class="doc-list">
+            ${
+              closedMonths.length
+                ? closedMonths.map((row) => `<div class="doc"><div><strong>${routineCompetenceLabel(row.competence)}</strong><span>${escapeHtml(row.company)} · ${escapeHtml(row.status)} · ${escapeHtml(row.closedBy || "RH")}</span></div><div>${statusPill("Fechado")}</div></div>`).join("")
+                : ""
+            }
+            ${
+              routineStatusRows.length
+                ? routineStatusRows.map((row) => `<div class="doc"><div><strong>${escapeHtml(row.routineKey)}</strong><span>${routineCompetenceLabel(row.competence)} · ${escapeHtml(row.company)}</span></div><div>${statusPill(row.status?.done ? "Verde" : "Pendente")}</div></div>`).join("")
+                : ""
+            }
+            ${!closedMonths.length && !routineStatusRows.length ? `<div class="empty">Nenhum histórico anterior para este filtro.</div>` : ""}
+          </div>`
+        : ""
+    }
+  </div>`;
+};
+
 function masterDataPage() {
   const activeCompany = state.company || "Todas";
   const scopedEmployees = employees.filter((employee) => matchesCompanyFilter(employee.company, activeCompany));
@@ -5798,6 +6227,12 @@ function handleDelegatedAppClick(event, appRoot) {
       "button[data-routine-company]",
       "button[data-routine-competence]",
       "button[data-routine-history-toggle]",
+      "[data-routine-execute-imports]",
+      "[data-routine-execute-monthly]",
+      "[data-routine-close-month]",
+      "[data-temporary-routine-new]",
+      "[data-temporary-routine-cancel]",
+      "[data-temporary-routine-execute]",
       "[data-master-company]",
       "[data-master-create]",
       "[data-master-cancel]",
@@ -5856,14 +6291,12 @@ function handleDelegatedAppClick(event, appRoot) {
     state.company = dataset.requestsCompany || "Todas";
     renderPage();
   } else if (dataset.routineMark !== undefined) {
-    const store = rhRoutineStatusStore();
-    store[rhRoutineKey(dataset.routineCompany, dataset.routineMark)] = {
+    setRoutineStatus(dataset.routineCompany || state.company || "Todas", dataset.routineMark, {
       done: true,
       fileName: "Concluído manualmente",
-      by: currentUser.name,
-      at: new Date().toISOString(),
-    };
-    saveRhRoutineStatusStore(store);
+      category: "monthly",
+    });
+    state.rhRoutineMessage = "Rotina marcada como concluída.";
     renderPage();
   } else if (dataset.routineExecute !== undefined) {
     target.disabled = true;
@@ -5874,9 +6307,30 @@ function handleDelegatedAppClick(event, appRoot) {
     if (dataset.routineCompetence === "next") state.rhRoutineCompetence = shiftMonthKey(routineCompetence(), 1);
     if (dataset.routineCompetence === "current") state.rhRoutineCompetence = currentMonthKey();
     state.rhTaskMessage = "";
+    state.rhRoutineMessage = "";
     renderPage();
   } else if (dataset.routineHistoryToggle !== undefined) {
     state.rhRoutineHistoryOpen = !state.rhRoutineHistoryOpen;
+    renderPage();
+  } else if (dataset.routineExecuteImports !== undefined) {
+    markRoutineCategory("imports");
+    renderPage();
+  } else if (dataset.routineExecuteMonthly !== undefined) {
+    markRoutineCategory("monthly");
+    renderPage();
+  } else if (dataset.routineCloseMonth !== undefined) {
+    if (window.confirm("Fechar esta competência? O mês será avançado e as rotinas temporárias concluídas ficarão no histórico.")) {
+      closeRoutineMonth();
+      renderPage();
+    }
+  } else if (dataset.temporaryRoutineNew !== undefined) {
+    state.rhTemporaryModalOpen = true;
+    renderPage();
+  } else if (dataset.temporaryRoutineCancel !== undefined) {
+    state.rhTemporaryModalOpen = false;
+    renderPage();
+  } else if (dataset.temporaryRoutineExecute !== undefined) {
+    executeTemporaryRoutines();
     renderPage();
   } else if (dataset.rhTaskStatus !== undefined) {
     updateRhTaskStatus(dataset.rhTaskStatus, dataset.status || "done");
@@ -5958,13 +6412,7 @@ function handleDelegatedAppClick(event, appRoot) {
   } else if (dataset.emailReviewDiscard !== undefined) {
     updateEmailReviewStatus(dataset.emailReviewDiscard, "cancelled");
   } else if (dataset.temporaryRoutineClose !== undefined) {
-    const store = temporaryRoutineClosedStore();
-    store[dataset.temporaryRoutineClose] = {
-      done: true,
-      by: currentUser.name,
-      at: new Date().toISOString(),
-    };
-    saveTemporaryRoutineClosedStore(store);
+    closeTemporaryRoutine(dataset.temporaryRoutineClose);
     renderPage();
   } else if (dataset.showMore !== undefined) {
     const step = initialListLimits[dataset.showMore] || 50;
@@ -6191,7 +6639,7 @@ function bind() {
     input.addEventListener("change", () => {
       const file = input.files?.[0];
       if (!file) return;
-      setRoutineFile(input.dataset.routineCompany, input.dataset.routineUpload, file);
+      setRoutineFile(input.dataset.routineCompany || state.company || "Todas", input.dataset.routineUpload, file);
       renderPage();
     });
   });
@@ -6208,7 +6656,27 @@ function bind() {
       dropzone.classList.remove("dragging");
       const file = event.dataTransfer?.files?.[0];
       if (!file) return;
-      setRoutineFile(dropzone.dataset.routineCompany, dropzone.dataset.routineDrop, file);
+      setRoutineFile(dropzone.dataset.routineCompany || state.company || "Todas", dropzone.dataset.routineDrop, file);
+      renderPage();
+    });
+  });
+  const temporaryRoutineForm = document.querySelector("#temporary-routine-form");
+  if (temporaryRoutineForm) {
+    temporaryRoutineForm.addEventListener("submit", (event) => {
+      event.preventDefault();
+      createTemporaryRoutineFromForm(temporaryRoutineForm);
+      renderPage();
+    });
+  }
+  document.querySelectorAll("[data-temporary-routine-new]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.rhTemporaryModalOpen = true;
+      renderPage();
+    });
+  });
+  document.querySelectorAll("[data-temporary-routine-cancel]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.rhTemporaryModalOpen = false;
       renderPage();
     });
   });

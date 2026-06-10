@@ -800,6 +800,17 @@ button {
   margin-top: 16px;
 }
 
+.routine-topbar {
+  display: grid;
+  gap: 12px;
+}
+
+.routine-company-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .routine-period-bar {
   display: flex;
   align-items: center;
@@ -828,6 +839,125 @@ button {
   color: var(--ink);
   font-size: 18px;
   margin-top: 2px;
+}
+
+.compact-period {
+  margin-bottom: 0;
+}
+
+.routine-summary {
+  margin-top: 16px;
+}
+
+.routine-board-three {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  align-items: start;
+  margin-top: 16px;
+}
+
+.routine-column {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 14px;
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.routine-column-title {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.routine-column-title h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.routine-column-title p {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.routine-card-list {
+  display: grid;
+  gap: 10px;
+}
+
+.routine-tile {
+  border: 1px solid #efc8c0;
+  border-left: 5px solid #d85c4a;
+  border-radius: 8px;
+  background: #fff8f7;
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  text-align: left;
+  width: 100%;
+}
+
+.routine-tile.done {
+  border-color: #b9dfc9;
+  border-left-color: #2b8a5a;
+  background: #f7fffa;
+}
+
+.routine-tile.button-tile {
+  cursor: pointer;
+}
+
+.routine-tile.button-tile:hover {
+  box-shadow: inset 0 0 0 2px rgba(31, 111, 104, 0.12);
+}
+
+.routine-tile-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.routine-tile strong {
+  color: var(--ink);
+  line-height: 1.25;
+}
+
+.routine-tile span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.routine-close-month,
+.routine-close-hint {
+  margin-top: 16px;
+}
+
+.routine-close-month {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 9998;
+  background: rgba(10, 23, 33, 0.52);
+  display: grid;
+  place-items: center;
+  padding: 20px;
+}
+
+.modal {
+  width: min(680px, 100%);
+  max-height: calc(100vh - 40px);
+  overflow: auto;
 }
 
 .period-actions,
@@ -2429,6 +2559,7 @@ td {
   .grid.two,
   .grid.three,
   .rh-routines-layout,
+  .routine-board-three,
   .routine-grid,
   .master-editor-grid,
   .paystub-filter-grid,
@@ -2440,6 +2571,18 @@ td {
 
   .temporary-routines-panel {
     position: static;
+  }
+
+  .routine-column-title,
+  .routine-tile-head,
+  .routine-close-month {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .routine-topbar .btn,
+  .routine-company-tabs .company-chip {
+    width: 100%;
   }
 }
 
