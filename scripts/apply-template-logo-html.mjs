@@ -254,8 +254,8 @@ function templatePlaceholders(template) {
 function rowsForTemplate(template) {
   const keys = templatePlaceholders(template);
   const row = (label, value) => `<tr>
-  <td style="padding:8px 10px;border-bottom:1px solid #f0f0f0;color:#888">${label}</td>
-  <td style="padding:8px 10px;border-bottom:1px solid #f0f0f0;font-weight:600;color:#111">${value}</td>
+  <td width="42%" valign="top" style="padding:8px 10px;border-bottom:1px solid #f0f0f0;color:#888;word-break:break-word">${label}</td>
+  <td width="58%" valign="top" style="padding:8px 10px;border-bottom:1px solid #f0f0f0;font-weight:600;color:#111;word-break:break-word">${value}</td>
 </tr>`;
   if (!keys.length) return row("Template", template.template_key);
   return keys.map((key) => row(readableLabel(key), `{{${key}}}`)).join("");
@@ -274,7 +274,7 @@ function htmlForTemplate(template, urls) {
     : `<a href="{{link}}" style="display:inline-block;background:#1a5c3a;color:#ffffff;padding:11px 22px;border-radius:5px;text-decoration:none;font-size:14px;font-weight:700">Acessar portal →</a>`;
   return `<table width="100%" cellpadding="0" cellspacing="0" border="0" style="font-family:Arial,sans-serif;background:#f0f0f0">
 <tr><td align="center" style="padding:20px 10px">
-<table width="600" cellpadding="0" cellspacing="0" border="0" style="background:#ffffff;border-radius:6px;overflow:hidden">
+<table width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#ffffff;border-radius:6px;overflow:hidden;max-width:600px">
 ${headerBlock(template.template_key, urls)}
 <tr><td style="background:#e87722;height:4px"></td></tr>
 <tr><td style="padding:24px">
