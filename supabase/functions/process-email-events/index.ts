@@ -37,6 +37,11 @@ const dailyAlertThreshold = Number(Deno.env.get("EMAIL_DAILY_ALERT_THRESHOLD") ?
 const pauseAutomatic = (Deno.env.get("EMAIL_PAUSE_AUTOMATIC") ?? "false").toLowerCase() === "true";
 const testMode = (Deno.env.get("EMAIL_TEST_MODE") ?? "false").toLowerCase() === "true";
 const testRecipient = Deno.env.get("EMAIL_TEST_RECIPIENT") ?? "";
+const companyLogoUrls: Record<string, string> = {
+  prodelar: "https://drive.google.com/uc?export=view&id=1mOb9M7VjXirADvI8En-zBY8Xtz6YolqP",
+  colmob: "https://drive.google.com/uc?export=view&id=1Cp1Ylg7VFq4w8SUjIoNKZliCVpcaN87c",
+  servimec: "https://drive.google.com/uc?export=view&id=1TxPxHf8h8MxF7OLFoqGLEPsF-zPf-Qx_",
+};
 
 const supabase = createClient(supabaseUrl, serviceRoleKey, {
   auth: { persistSession: false },
@@ -52,6 +57,26 @@ function renderTemplate(template: string, payload: Record<string, unknown>) {
     }, payload);
     return value === undefined || value === null ? "" : String(value);
   });
+}
+
+function normalizeCompanyLogoKey(value: unknown) {
+  const normalized = String(value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase();
+  if (normalized.includes("COLMOB")) return "colmob";
+  if (normalized.includes("SERVIMEC")) return "servimec";
+  return "prodelar";
+}
+
+function payloadWithCompanyLogo(payload: Record<string, unknown>) {
+  const explicitLogo = payload.empresa_logo_url;
+  if (explicitLogo) return payload;
+  const companyKey = normalizeCompanyLogoKey(payload.empresa ?? payload.company ?? payload.company_name);
+  return {
+    ...payload,
+    empresa_logo_url: companyLogoUrls[companyKey] ?? companyLogoUrls.prodelar,
+  };
 }
 
 function utf8ToBase64(value: string) {
@@ -248,10 +273,11 @@ async function processEvent(event: EmailEvent) {
     throw new Error(templateError?.message ?? `Template not found: ${event.app_name}/${event.template_key}`);
   }
 
-  const subject = event.subject || renderTemplate(template.subject_template, event.payload ?? {});
-  const body = renderTemplate(template.body_template, event.payload ?? {});
+  const payload = payloadWithCompanyLogo(event.payload ?? {});
+  const subject = event.subject || renderTemplate(template.subject_template, payload);
+  const body = renderTemplate(template.body_template, payload);
   const htmlBody = template.body_html_template
-    ? renderTemplate(template.body_html_template, event.payload ?? {})
+    ? renderTemplate(template.body_html_template, payload)
     : buildStandardHtml(subject, body, event);
   const { providerMessageId, actualRecipientEmail } = await sendWithGmail(event, subject, body, htmlBody);
 

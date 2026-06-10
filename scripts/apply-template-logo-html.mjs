@@ -1,20 +1,19 @@
 import fs from "fs";
-import path from "path";
 
 const LOGOS = {
   prodelar: {
     file: "assets/logo-prodelar.jpg",
-    name: "Logomarca_Prodelar__att_.jpg",
+    name: "logo-prodelar.jpg",
     label: "Prodelar",
   },
   colmob: {
     file: "assets/logo-colmob.jpg",
-    name: "Logo_Colmob__att_.jpg",
+    name: "logo-colmob.jpg",
     label: "Colmob",
   },
   servimec: {
     file: "assets/logo-servimec.jpg",
-    name: "Logomarca_Servimec__att_.jpg",
+    name: "logo-servimec.jpg",
     label: "Servimec",
   },
 };
@@ -202,69 +201,97 @@ async function uploadLogo(key, logo, folderId, accessToken) {
 }
 
 function statusColor(templateKey) {
-  if (/(vencido|encerrado|desligamento|falha|erro|reprovado|afastamento)/i.test(templateKey)) return ["#b42318", "#fcebeb", "Atenção necessária"];
-  if (/(pendente|vencendo|atestado|experiencia|experiência|cnh)/i.test(templateKey)) return ["#b7791f", "#faeeda", "Pendente de acompanhamento"];
-  if (/(contracheque|salario|salário|decimo|décimo|folha|relatorio|relatório)/i.test(templateKey)) return ["#1f6fb2", "#e6f1fb", "Informação disponível"];
-  if (/(aprovad|renovado|primeiro|entregue|aniversario|aniversário|efetivado)/i.test(templateKey)) return ["#1a7f4b", "#eaf3de", "Concluído"];
-  return ["#667085", "#eef2f1", "Comunicado RH"];
+  if (/(vencido|urgente|reprovado|falha|erro|afastamento)/i.test(templateKey)) return ["#FCEBEB", "#A32D2D", "Urgente"];
+  if (/(pendente|atenção|atencao|prazo|vencendo|experiencia|experiência|cnh|atestado)/i.test(templateKey)) return ["#FAEEDA", "#854F0B", "Atenção"];
+  if (/(contracheque|informativo|salario|salário|decimo|décimo|folha|acesso|relatorio|relatório)/i.test(templateKey)) return ["#E6F1FB", "#0C447C", "Informativo"];
+  if (/(aprovad|boas|primeiro|enviado|renovado|entregue|aniversario|aniversário|efetivado)/i.test(templateKey)) return ["#EAF3DE", "#3B6D11", "Aprovado"];
+  if (/(desligamento|comunicado)/i.test(templateKey)) return ["#F1EFE8", "#5F5E5A", "Comunicado"];
+  return ["#F1EFE8", "#5F5E5A", "RH"];
 }
 
 function logoCell(src, alt) {
-  return `<td align="center" style="padding:8px 10px;background:#ffffff;border-radius:8px;border:1px solid #dbe7e0;"><img src="${src}" width="120" alt="${alt}" style="display:block;border:0;max-width:120px;height:auto;"></td>`;
+  return `<td style="background:#ffffff;border-radius:4px;padding:4px 10px"><img src="${src}" alt="${alt}" height="28" style="display:block"></td>`;
 }
 
-function renderLogoBlock(templateKey, urls) {
+function headerBlock(templateKey, urls) {
   if (GROUP_LOGO_TEMPLATES.has(templateKey)) {
-    return `<table role="presentation" cellpadding="0" cellspacing="0" align="right" style="border-collapse:separate;border-spacing:6px 0;"><tr>${logoCell(urls.prodelar.publicUrl, "Prodelar")}${logoCell(urls.colmob.publicUrl, "Colmob")}${logoCell(urls.servimec.publicUrl, "Servimec")}</tr></table>`;
+    return `<tr><td style="background:#1a5c3a;padding:16px 24px">
+  <table cellpadding="0" cellspacing="0" border="0"><tr>
+    ${logoCell(urls.prodelar.publicUrl, "Prodelar")}
+    <td width="8"></td>
+    ${logoCell(urls.colmob.publicUrl, "Colmob")}
+    <td width="8"></td>
+    ${logoCell(urls.servimec.publicUrl, "Servimec")}
+  </tr></table>
+  <div style="color:#a8d5b5;font-size:11px;margin-top:6px">Recursos Humanos · Grupo Prodelar</div>
+</td></tr>`;
   }
-  return `<table role="presentation" cellpadding="0" cellspacing="0" align="right" style="border-collapse:collapse;"><tr>${logoCell("{{empresa_logo_url}}", "Empresa do colaborador")}</tr></table>`;
+  return `<tr><td style="background:#1a5c3a;padding:16px 24px">
+  <table cellpadding="0" cellspacing="0" border="0"><tr>
+    ${logoCell("{{empresa_logo_url}}", "{{empresa}}")}
+  </tr></table>
+  <div style="color:#a8d5b5;font-size:11px;margin-top:6px">Recursos Humanos · {{empresa}}</div>
+</td></tr>`;
+}
+
+function readableLabel(key) {
+  return String(key)
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function templatePlaceholders(template) {
+  const found = new Set();
+  const text = `${template.subject_template || ""}\n${template.body_template || ""}`;
+  for (const match of text.matchAll(/\{\{\s*([\w.-]+)\s*\}\}/g)) {
+    const key = match[1];
+    if (key !== "link") found.add(key);
+  }
+  const preferred = ["colaborador_nome", "empresa", "departamento", "cargo", "gestor_nome", "responsavel", "competencia", "prazo", "data", "data_credito", "status", "observacao"];
+  return [...preferred.filter((key) => found.has(key)), ...[...found].filter((key) => !preferred.includes(key))].slice(0, 8);
+}
+
+function rowsForTemplate(template) {
+  const keys = templatePlaceholders(template);
+  const row = (label, value) => `<tr>
+  <td style="padding:8px 10px;border-bottom:1px solid #f0f0f0;color:#888">${label}</td>
+  <td style="padding:8px 10px;border-bottom:1px solid #f0f0f0;font-weight:600;color:#111">${value}</td>
+</tr>`;
+  if (!keys.length) return row("Template", template.template_key);
+  return keys.map((key) => row(readableLabel(key), `{{${key}}}`)).join("");
+}
+
+function greetingForTemplate(template) {
+  const body = String(template.body_template || "").trim();
+  const firstParagraph = body.split(/\n\s*\n/)[0] || "Olá,";
+  return firstParagraph.replace(/\n/g, "<br>");
 }
 
 function htmlForTemplate(template, urls) {
-  const [tagColor, tagBg, tagText] = statusColor(template.template_key);
+  const [tagBg, tagColor, tagText] = statusColor(template.template_key);
   const button = /desligamento_colaborador_grupo/i.test(template.template_key)
     ? ""
-    : `<table role="presentation" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin:0 0 4px 0;"><tr><td bgcolor="#1a5c3a" style="border-radius:4px;"><a href="{{link}}" style="display:inline-block;padding:12px 18px;color:#ffffff;text-decoration:none;font-size:14px;font-weight:700;">Acessar portal</a></td></tr></table>`;
-  return `<!doctype html>
-<html>
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${template.subject_template}</title></head>
-<body style="margin:0;padding:0;background:#f3f7f5;font-family:Arial,Helvetica,sans-serif;color:#20302a;">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;background:#f3f7f5;margin:0;padding:0;">
-  <tr><td align="center" style="padding:24px 12px;">
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;max-width:680px;background:#ffffff;border:1px solid #dbe7e0;">
-      <tr>
-        <td style="background:#1a5c3a;padding:18px 20px;color:#ffffff;">
-          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
-            <tr>
-              <td valign="middle" style="font-size:18px;line-height:24px;font-weight:700;color:#ffffff;padding:0 12px 0 0;">Recursos Humanos · Grupo Prodelar</td>
-              <td align="right" valign="middle">${renderLogoBlock(template.template_key, urls)}</td>
-            </tr>
-          </table>
-        </td>
-      </tr>
-      <tr><td style="background:#e87722;height:4px;font-size:0;line-height:0;">&nbsp;</td></tr>
-      <tr><td style="padding:24px;">
-        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;"><tr><td style="padding:0 0 14px 0;font-size:22px;line-height:28px;font-weight:700;color:#18352a;">${template.subject_template}</td></tr></table>
-        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin:0 0 18px 0;"><tr><td style="border-left:5px solid ${tagColor};background:${tagBg};padding:12px 14px;font-size:14px;line-height:20px;font-weight:700;color:#20302a;">${tagText}</td></tr></table>
-        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin:0 0 18px 0;border:1px solid #dbe7e0;">
-          <tr><td style="padding:9px 12px;border-bottom:1px solid #dbe7e0;background:#f8fbf9;font-size:12px;font-weight:700;color:#52665e;">Campo</td><td style="padding:9px 12px;border-bottom:1px solid #dbe7e0;background:#f8fbf9;font-size:12px;font-weight:700;color:#52665e;">Valor</td></tr>
-          <tr><td style="padding:9px 12px;border-bottom:1px solid #edf2ef;font-size:13px;color:#52665e;">Colaborador</td><td style="padding:9px 12px;border-bottom:1px solid #edf2ef;font-size:13px;color:#20302a;">{{colaborador_nome}}</td></tr>
-          <tr><td style="padding:9px 12px;border-bottom:1px solid #edf2ef;font-size:13px;color:#52665e;">Empresa</td><td style="padding:9px 12px;border-bottom:1px solid #edf2ef;font-size:13px;color:#20302a;">{{empresa}}</td></tr>
-          <tr><td style="padding:9px 12px;border-bottom:1px solid #edf2ef;font-size:13px;color:#52665e;">Departamento/Cargo</td><td style="padding:9px 12px;border-bottom:1px solid #edf2ef;font-size:13px;color:#20302a;">{{departamento}} {{cargo}}</td></tr>
-          <tr><td style="padding:9px 12px;border-bottom:1px solid #edf2ef;font-size:13px;color:#52665e;">Competência</td><td style="padding:9px 12px;border-bottom:1px solid #edf2ef;font-size:13px;color:#20302a;">{{competencia}}</td></tr>
-          <tr><td style="padding:9px 12px;border-bottom:1px solid #edf2ef;font-size:13px;color:#52665e;">Prazo/Data</td><td style="padding:9px 12px;border-bottom:1px solid #edf2ef;font-size:13px;color:#20302a;">{{prazo}} {{data}} {{data_credito}}</td></tr>
-          <tr><td style="padding:9px 12px;border-bottom:1px solid #edf2ef;font-size:13px;color:#52665e;">Responsável/Gestor</td><td style="padding:9px 12px;border-bottom:1px solid #edf2ef;font-size:13px;color:#20302a;">{{responsavel}} {{gestor_nome}}</td></tr>
-          <tr><td style="padding:9px 12px;font-size:13px;color:#52665e;">Status/Observação</td><td style="padding:9px 12px;font-size:13px;color:#20302a;">{{status}} {{observacao}}</td></tr>
-        </table>
-        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin:0 0 18px 0;"><tr><td style="font-size:15px;line-height:23px;color:#20302a;">${String(template.body_template || "").replace(/\n/g, "<br>")}</td></tr></table>
-        ${button}
-      </td></tr>
-      <tr><td style="background:#f8fbf9;border-top:1px solid #dbe7e0;padding:16px 24px;font-size:12px;line-height:18px;color:#667085;">Mensagem automática · rh@grupoprodelar.com.br</td></tr>
-    </table>
-  </td></tr>
-</table>
-</body>
-</html>`;
+    : `<a href="{{link}}" style="display:inline-block;background:#1a5c3a;color:#ffffff;padding:11px 22px;border-radius:5px;text-decoration:none;font-size:14px;font-weight:700">Acessar portal →</a>`;
+  return `<table width="100%" cellpadding="0" cellspacing="0" border="0" style="font-family:Arial,sans-serif;background:#f0f0f0">
+<tr><td align="center" style="padding:20px 10px">
+<table width="600" cellpadding="0" cellspacing="0" border="0" style="background:#ffffff;border-radius:6px;overflow:hidden">
+${headerBlock(template.template_key, urls)}
+<tr><td style="background:#e87722;height:4px"></td></tr>
+<tr><td style="padding:24px">
+  <div style="display:inline-block;background:${tagBg};color:${tagColor};padding:3px 14px;border-radius:20px;font-size:12px;font-weight:700;margin-bottom:14px">${tagText}</div>
+  <div style="font-size:20px;font-weight:700;color:#1a5c3a;margin-bottom:10px;line-height:1.3">${template.subject_template}</div>
+  <div style="font-size:14px;color:#444;margin-bottom:18px;line-height:1.6">${greetingForTemplate(template)}</div>
+  <table width="100%" cellpadding="0" cellspacing="0" border="0" style="font-size:13px;margin-bottom:18px">${rowsForTemplate(template)}</table>
+  ${button}
+</td></tr>
+<tr><td style="background:#f8f9fa;padding:14px 24px;border-top:1px solid #eeeeee">
+  <div style="font-size:11px;color:#999;line-height:1.7">
+    <strong style="color:#666">Recursos Humanos · ${GROUP_LOGO_TEMPLATES.has(template.template_key) ? "Grupo Prodelar" : "{{empresa}}"}</strong><br>
+    rh@grupoprodelar.com.br &nbsp;·&nbsp; Mensagem automática<br>
+    Não responda este e-mail. Em caso de dúvidas, acesse o portal.
+  </div>
+</td></tr>
+</table></td></tr></table>`;
 }
 
 const accessToken = await getGoogleToken();
