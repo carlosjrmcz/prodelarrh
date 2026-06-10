@@ -59,6 +59,10 @@ function renderTemplate(template: string, payload: Record<string, unknown>) {
   });
 }
 
+function renderHtmlTemplate(template: string, payload: Record<string, unknown>) {
+  return renderTemplate(template, payload).replace(/\\n/g, "<br>");
+}
+
 function normalizeCompanyLogoKey(value: unknown) {
   const normalized = String(value ?? "")
     .normalize("NFD")
@@ -277,7 +281,7 @@ async function processEvent(event: EmailEvent) {
   const subject = event.subject || renderTemplate(template.subject_template, payload);
   const body = renderTemplate(template.body_template, payload);
   const htmlBody = template.body_html_template
-    ? renderTemplate(template.body_html_template, payload)
+    ? renderHtmlTemplate(template.body_html_template, payload)
     : buildStandardHtml(subject, body, event);
   const { providerMessageId, actualRecipientEmail } = await sendWithGmail(event, subject, body, htmlBody);
 
