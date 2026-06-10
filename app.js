@@ -258,6 +258,8 @@ const currentUser = {
   ...simulatedProfiles.RH,
 };
 
+let impersonating = null;
+
 const simulationSeedPeople = [
   { name: "Carlos Junior", profile: "Diretoria", company: "Todas", department: "Diretoria", role: "Diretor", cpf: "00000000001", birthDate: "1980-01-01" },
   { name: "Anderson Nascimento", profile: "Diretoria", company: "Todas", department: "Diretoria", role: "Diretor", cpf: "00000000002", birthDate: "1980-01-01" },
@@ -1187,7 +1189,178 @@ function renderTestSwitcher(user = currentUser) {
   document.body.style.paddingTop = "36px";
 }
 
+function isImpersonationAdmin(user = currentUser) {
+  return String(user?.email || state.authUser?.email || state.authProfile?.email || "").trim().toLowerCase() === "carlosjrmcz@gmail.com";
+}
+
+function removeImpersonationBar() {
+  document.getElementById("impersonation-bar")?.remove();
+  if (!document.getElementById("test-user-switcher")) document.body.style.paddingTop = "";
+}
+
+function getRoleColor(role) {
+  const colors = {
+    diretor: "#1a5c3a",
+    gestor_rh: "#0C447C",
+    gestor_financeiro: "#854F0B",
+    gestor: "#3B6D11",
+    supervisor: "#5F5E5A",
+    colaborador: "#444",
+  };
+  return colors[role] || "#444";
+}
+
+function getEffectiveEmployeeId() {
+  return window._impersonatedEmployee?.employeeId || currentEmployeeRecord()?.dbId || currentEmployeeRecord()?.id || "";
+}
+
+function getEffectiveRoleCode() {
+  return window._impersonatedEmployee?.roleCode || state.authProfile?.role_code || currentUser.role || currentUser.profile || "";
+}
+
+async function renderImpersonationBar(user = currentUser) {
+  if (!isImpersonationAdmin(user) || !supabaseClient) {
+    removeImpersonationBar();
+    return;
+  }
+
+  let bar = document.getElementById("impersonation-bar");
+  if (!bar) {
+    bar = document.createElement("div");
+    bar.id = "impersonation-bar";
+    document.body.prepend(bar);
+    bar.addEventListener("change", (event) => {
+      if (event.target?.id === "imp-select") applyImpersonation(event.target.value);
+    });
+    bar.addEventListener("click", (event) => {
+      if (event.target.closest("[data-clear-impersonation]")) clearImpersonation();
+    });
+  }
+
+  const { data: employeesRows, error } = await supabaseClient
+    .from("hr_employee_directory")
+    .select("id, full_name, status, company_name, department_name, position_name, manager_name")
+    .eq("status", "active")
+    .order("full_name");
+
+  if (error) {
+    console.warn("Erro ao carregar colaboradores para impersonação:", error.message);
+    return;
+  }
+
+  const employeeIds = (employeesRows || []).map((employee) => employee.id);
+  const { data: profileRows } = employeeIds.length
+    ? await supabaseClient.from("hr_profiles").select("employee_id, role_code").in("employee_id", employeeIds)
+    : { data: [] };
+  const roleByEmployee = new Map((profileRows || []).map((profile) => [profile.employee_id, profile.role_code]));
+
+  bar.style.cssText = `
+    position: fixed; top: 0; left: 0; right: 0; z-index: 9999;
+    background: #1a3a5c; padding: 8px 16px;
+    display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+    font-size: 12px; border-bottom: 2px solid #e87722;
+  `;
+
+  bar.innerHTML = `
+    <span style="color:#8bacc8;font-weight:600">MODO TESTE:</span>
+    <select id="imp-select" style="background:#fff;border:none;padding:4px 8px;border-radius:4px;font-size:12px;max-width:360px">
+      <option value="">- Agir como colaborador -</option>
+      ${(employeesRows || []).map((employee) => `
+        <option value="${escapeHtml(employee.id)}" ${impersonating?.employeeId === employee.id ? "selected" : ""}>
+          ${escapeHtml(employee.full_name)} · ${escapeHtml(employee.company_name || "")} · ${escapeHtml(employee.position_name || "")}
+        </option>
+      `).join("")}
+    </select>
+    ${impersonating ? `
+      <span style="color:#e87722;font-weight:600">✓ ${escapeHtml(impersonating.employeeName)}</span>
+      <span style="color:#8bacc8">Chefe: ${escapeHtml(impersonating.managerName || "sem gestor")}</span>
+      <span style="background:${getRoleColor(impersonating.roleCode)};color:#fff;padding:2px 8px;border-radius:4px">
+        ${escapeHtml(impersonating.roleCode)}
+      </span>
+      <button type="button" data-clear-impersonation style="background:#FCEBEB;color:#A32D2D;border:none;padding:3px 10px;border-radius:4px;cursor:pointer;font-size:11px">
+        Sair
+      </button>
+    ` : ""}
+    <span style="color:#5a7a9a;font-size:10px;margin-left:auto">MODO TESTE - remover antes do go-live</span>
+  `;
+
+  window._impersonationEmployees = employeesRows || [];
+  window._impersonationRoles = roleByEmployee;
+  document.body.style.paddingTop = "44px";
+}
+
+async function applyImpersonation(employeeId) {
+  if (!employeeId) {
+    clearImpersonation();
+    return;
+  }
+
+  let employee = (window._impersonationEmployees || []).find((item) => item.id === employeeId);
+  if (!employee) {
+    const { data } = await supabaseClient
+      .from("hr_employee_directory")
+      .select("id, full_name, status, company_name, department_name, position_name, manager_name")
+      .eq("id", employeeId)
+      .single();
+    employee = data;
+  }
+  if (!employee) return;
+
+  const { data: profile } = await supabaseClient
+    .from("hr_profiles")
+    .select("role_code")
+    .eq("employee_id", employeeId)
+    .maybeSingle();
+
+  const roleCode = profile?.role_code || window._impersonationRoles?.get(employeeId) || "colaborador";
+  const appProfile = appProfileFromRoleCode(roleCode);
+  impersonating = {
+    employeeId: employee.id,
+    employeeName: employee.full_name,
+    roleCode,
+    managerId: "",
+    managerName: employee.manager_name || "",
+    companyName: employee.company_name || "",
+  };
+  window._impersonatedEmployee = impersonating;
+
+  Object.assign(currentUser, {
+    name: employee.full_name,
+    profile: appProfile,
+    company: employee.company_name || "Todas",
+    department: employee.department_name || "Sem setor",
+    role: employee.position_name || roleCode,
+    scope: simulatedProfiles[appProfile]?.scope || "self",
+    homePage: "portal",
+    cpf: "",
+    birthDate: "",
+    email: state.authUser?.email || state.authProfile?.email || currentUser.email || "",
+  });
+  state.activeProfile = appProfile;
+  state.simulatedPerson = currentUser.name;
+  state.company = currentUser.company || "Todas";
+  state.requestCompany = currentUser.company || "Todas";
+  renderMemo = {};
+  await renderImpersonationBar({ email: "carlosjrmcz@gmail.com" });
+  renderPage();
+}
+
+function clearImpersonation() {
+  impersonating = null;
+  window._impersonatedEmployee = null;
+  if (state.authUser || state.authProfile) {
+    const employee = employees.find((item) => item.dbId === state.authProfile?.employee_id || item.id === state.authProfile?.employee_id) || null;
+    applyAuthenticatedProfile({ user: state.authUser, profile: state.authProfile, employee });
+  }
+  renderMemo = {};
+  renderPage();
+}
+
 function applyAuthenticatedProfile({ user, profile, employee } = {}) {
+  if (String(user?.email || profile?.email || "").toLowerCase() !== "carlosjrmcz@gmail.com") {
+    impersonating = null;
+    window._impersonatedEmployee = null;
+  }
   const roleCode = profile?.role_code || user?.user_metadata?.role_code || "colaborador";
   const appProfile = appProfileFromRoleCode(roleCode);
   const employeeRecord = employee || employees.find((item) => item.dbId === profile?.employee_id || normalizeText(item.email) === normalizeText(profile?.email || user?.email));
@@ -1219,6 +1392,7 @@ function applyAuthenticatedProfile({ user, profile, employee } = {}) {
     state.company = "Todas";
   }
   renderTestSwitcher(currentUser);
+  renderImpersonationBar(currentUser);
 }
 
 async function loadAuthProfile(session) {
@@ -1566,6 +1740,24 @@ function employeesManagedBy(leaderName) {
 }
 
 function currentEmployeeRecord() {
+  if (window._impersonatedEmployee?.employeeId) {
+    const impersonatedId = window._impersonatedEmployee.employeeId;
+    const byImpersonatedId = employees.find((employee) => employee.dbId === impersonatedId || employee.id === impersonatedId);
+    if (byImpersonatedId) return byImpersonatedId;
+    return {
+      id: impersonatedId,
+      dbId: impersonatedId,
+      name: window._impersonatedEmployee.employeeName,
+      company: window._impersonatedEmployee.companyName || currentUser.company,
+      department: currentUser.department,
+      role: currentUser.role,
+      manager: window._impersonatedEmployee.managerName || "Sem líder",
+      status: "Ativo",
+      vacation: "Consultar",
+      timeBank: "Consultar",
+      email: "",
+    };
+  }
   const profileEmployeeId = state.authProfile?.employee_id || "";
   if (profileEmployeeId) {
     const byId = employees.find((employee) => employee.dbId === profileEmployeeId || employee.id === profileEmployeeId);
@@ -6350,20 +6542,24 @@ function renderPage() {
   renderMemo = {};
   if (!state.authChecked) {
     removeTestSwitcher();
+    removeImpersonationBar();
     commitAppHtml(authPage(), bindAuth);
     return;
   }
   if (!state.authSession) {
     removeTestSwitcher();
+    removeImpersonationBar();
     commitAppHtml(authPage(), bindAuth);
     return;
   }
   if (shouldForcePasswordChange()) {
     renderTestSwitcher(currentUser);
+    renderImpersonationBar(currentUser);
     commitAppHtml(passwordChangePage(), bindAuth);
     return;
   }
   renderTestSwitcher(currentUser);
+  renderImpersonationBar(currentUser);
   if (!canAccessPage(state.page)) {
     state.page = currentUser.homePage;
     updatePageUrl(state.page, true);

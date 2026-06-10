@@ -247,7 +247,24 @@ function templatePlaceholders(template) {
     const key = match[1];
     if (key !== "link") found.add(key);
   }
-  const preferred = ["colaborador_nome", "empresa", "departamento", "cargo", "gestor_nome", "responsavel", "competencia", "prazo", "data", "data_credito", "status", "observacao"];
+  const preferred = [
+    "colaborador_nome",
+    "empresa",
+    "departamento",
+    "cargo",
+    "gestor_nome",
+    "responsavel",
+    "competencia",
+    "tipo_aso",
+    "item",
+    "quantidade",
+    "prazo",
+    "data",
+    "data_vencimento",
+    "data_credito",
+    "status",
+    "observacao",
+  ];
   return [...preferred.filter((key) => found.has(key)), ...[...found].filter((key) => !preferred.includes(key))].slice(0, 8);
 }
 
@@ -294,12 +311,25 @@ ${headerBlock(template.template_key, urls)}
 </table></td></tr></table>`;
 }
 
-const accessToken = await getGoogleToken();
-const rootFolder = await ensureRootFolder(accessToken);
-const logosFolder = await ensureLogosFolder(accessToken, rootFolder.id);
-const uploaded = {};
-for (const [key, logo] of Object.entries(LOGOS)) {
-  uploaded[key] = await uploadLogo(key, logo, logosFolder.id, accessToken);
+let rootFolder;
+let logosFolder;
+let uploaded;
+
+if (fs.existsSync("docs/template-logo-urls.json")) {
+  const cached = JSON.parse(fs.readFileSync("docs/template-logo-urls.json", "utf8"));
+  rootFolder = cached.rootFolder;
+  logosFolder = cached.logosFolder;
+  uploaded = cached.uploaded;
+}
+
+if (!uploaded?.prodelar?.publicUrl || !uploaded?.colmob?.publicUrl || !uploaded?.servimec?.publicUrl) {
+  const accessToken = await getGoogleToken();
+  rootFolder = await ensureRootFolder(accessToken);
+  logosFolder = await ensureLogosFolder(accessToken, rootFolder.id);
+  uploaded = {};
+  for (const [key, logo] of Object.entries(LOGOS)) {
+    uploaded[key] = await uploadLogo(key, logo, logosFolder.id, accessToken);
+  }
 }
 
 const templates = await rest("email_templates?select=template_key,subject_template,body_template&app_name=eq.recursos_humanos&order=template_key.asc");
