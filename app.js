@@ -601,6 +601,10 @@ const state = {
   rhRoutineMessage: "",
   rhRoutineHistoryOpen: false,
   rhTemporaryModalOpen: false,
+  accountingCompany: "Prodelar",
+  accountingCompetence: "",
+  accountingMessage: "",
+  accountingHistoryOpen: false,
   vacationMessage: "",
   pointMessage: "",
   pointAdjustmentOpen: false,
@@ -3966,27 +3970,235 @@ function portalPage() {
     </div>`;
 }
 
+function accountingCompetence() {
+  return state.accountingCompetence || currentMonthKey();
+}
+
+function accountingCompany() {
+  return state.accountingCompany || "Prodelar";
+}
+
+function accountingPackageItems() {
+  return [
+    { key: "folha_pagamento", title: "Folha de pagamento", required: true },
+    { key: "ferias", title: "Férias", required: true },
+    { key: "rescisoes", title: "Rescisões", required: true },
+    { key: "contribuicoes", title: "Contribuições", required: true },
+    { key: "fgts", title: "FGTS", required: true },
+    { key: "outros", title: "Outros", required: false },
+  ];
+}
+
+function accountingPackageStore() {
+  return safeJsonParse(localStorage.getItem("rhAccountingPackage"), {});
+}
+
+function saveAccountingPackageStore(store) {
+  localStorage.setItem("rhAccountingPackage", JSON.stringify(store));
+}
+
+function accountingPackageHistoryStore() {
+  return safeJsonParse(localStorage.getItem("rhAccountingPackageHistory"), []);
+}
+
+function saveAccountingPackageHistoryStore(rows) {
+  localStorage.setItem("rhAccountingPackageHistory", JSON.stringify(rows.slice(0, 80)));
+}
+
+function accountingPackageKey(company, competence, itemKey) {
+  return `${competence}::${company}::${itemKey}`;
+}
+
+function accountingPackageStatus(company = accountingCompany(), competence = accountingCompetence()) {
+  const store = accountingPackageStore();
+  const items = accountingPackageItems();
+  const rows = items.map((item) => ({
+    ...item,
+    status: store[accountingPackageKey(company, competence, item.key)] || null,
+  }));
+  const uploaded = rows.filter((item) => item.status?.done).length;
+  const requiredRows = rows.filter((item) => item.required);
+  const requiredDone = requiredRows.filter((item) => item.status?.done).length;
+  return { rows, uploaded, total: rows.length, requiredDone, requiredTotal: requiredRows.length, ready: requiredDone === requiredRows.length };
+}
+
+function accountingDrivePath(company = accountingCompany(), competence = accountingCompetence()) {
+  return `RH Prodelar/Pacote mensal contabilidade/${competence}/${company}/`;
+}
+
+async function persistAccountingPackageItem(company, competence, item, status) {
+  if (!supabaseClient) return;
+  const companyId = routineCompanyId(company);
+  if (!companyId) return;
+  const routinePayload = {
+    company_id: companyId,
+    competence_month: `${competence}-01`,
+    routine_key: `pacote_mensal_${item.key}`,
+    routine_name: `Pacote mensal - ${item.title}`,
+    status: status.done ? "processed" : "pending",
+    source_mode: "upload",
+    original_file_name: status.fileName || null,
+    processed_by: state.authProfile?.id || null,
+    processed_at: status.done ? status.at || new Date().toISOString() : null,
+    raw_result: {
+      module_name: "pacote_mensal",
+      drive_path: status.drivePath,
+      item_key: item.key,
+      required: item.required,
+    },
+    category: "pacote_mensal",
+  };
+  const { data, error } = await supabaseClient
+    .from("hr_monthly_routines")
+    .upsert(routinePayload, { onConflict: "company_id,competence_month,routine_key" })
+    .select("id")
+    .single();
+  if (error) {
+    console.error("Erro ao persistir item do pacote mensal", error);
+    return;
+  }
+  const notes = JSON.stringify({
+    file_name: status.fileName || "",
+    drive_path: status.drivePath || accountingDrivePath(company, competence),
+    item_key: item.key,
+    item_title: item.title,
+    company,
+  });
+  const execution = await supabaseClient.from("hr_monthly_routine_executions").insert({
+    routine_id: data.id,
+    module_name: "pacote_mensal",
+    competence_month: competence,
+    status: status.done ? "enviado" : "pendente",
+    completed_by: state.authProfile?.id || null,
+    completed_at: status.done ? status.at || new Date().toISOString() : null,
+    notes,
+  });
+  if (execution.error) console.error("Erro ao registrar execução do pacote mensal", execution.error);
+}
+
+function setAccountingPackageFile(company, competence, itemKey, file) {
+  const item = accountingPackageItems().find((row) => row.key === itemKey);
+  if (!item || !file) return;
+  const store = accountingPackageStore();
+  const status = {
+    done: true,
+    fileName: file.name,
+    at: new Date().toISOString(),
+    by: currentUser.name,
+    drivePath: accountingDrivePath(company, competence),
+  };
+  store[accountingPackageKey(company, competence, item.key)] = status;
+  saveAccountingPackageStore(store);
+  void persistAccountingPackageItem(company, competence, item, status);
+  state.accountingMessage = `${item.title} anexado para ${company} · ${routineCompetenceLabel(competence)}.`;
+}
+
+async function sendAccountingPackage() {
+  const company = accountingCompany();
+  const competence = accountingCompetence();
+  const summary = accountingPackageStatus(company, competence);
+  if (!summary.ready) {
+    state.accountingMessage = "Ainda existem arquivos obrigatórios pendentes.";
+    renderPage();
+    return;
+  }
+  const subject = `[RH] Pacote mensal enviado - ${company} ${routineCompetenceLabel(competence)}`;
+  if (supabaseClient) {
+    const { error } = await supabaseClient.from("email_events").insert({
+      app_name: "recursos_humanos",
+      module_name: "pacote_mensal",
+      event_type: "pacote_mensal_enviado_contabilidade",
+      recipient_email: "rh@grupoprodelar.com.br",
+      recipient_name: "Diretoria / Contabilidade",
+      recipient_type: "interno",
+      subject,
+      template_key: "relatorio_mensal_diretoria",
+      status: "pending",
+      payload: {
+        competencia: routineCompetenceLabel(competence),
+        empresa: company,
+        total_colaboradores: employees.filter((employee) => matchesCompanyFilter(employee.company, company)).length,
+        admissoes: "-",
+        desligamentos: "-",
+        ferias: "-",
+        asos: "-",
+        link: window.location.origin,
+        drive_path: accountingDrivePath(company, competence),
+      },
+      created_by: state.authProfile?.id || currentUser.name,
+    });
+    if (error) {
+      state.accountingMessage = `Não foi possível enfileirar e-mail: ${error.message}`;
+      renderPage();
+      return;
+    }
+  }
+  const history = accountingPackageHistoryStore();
+  history.unshift({
+    id: `pkg-${Date.now()}`,
+    company,
+    competence,
+    status: "Enviado",
+    sentBy: currentUser.name,
+    sentAt: new Date().toISOString(),
+    files: `${summary.uploaded}/${summary.total}`,
+  });
+  saveAccountingPackageHistoryStore(history);
+  state.accountingMessage = `Pacote mensal de ${company} · ${routineCompetenceLabel(competence)} enviado para contabilidade.`;
+  renderPage();
+}
+
 function accountingPage() {
+  const company = accountingCompany();
+  const competence = accountingCompetence();
+  const summary = accountingPackageStatus(company, competence);
+  const history = accountingPackageHistoryStore().filter((row) => row.company === company);
   return `
-    <div class="grid two">
-      <div class="card pad">
-        <div class="section-title"><div><h2>Competência Março/2026</h2><p>Pacote operacional para contabilidade/Mastermaq</p></div>${statusPill("Em revisão")}</div>
-        <div class="checklist">
-          <div class="check done"><span class="box">✓</span><strong>Admissões e demissões conferidas</strong></div>
-          <div class="check done"><span class="box">✓</span><strong>Horas extras e banco de horas importados</strong></div>
-          <div class="check blocked"><span class="box">!</span><strong>Férias pendentes de aprovação</strong></div>
-          <div class="check done"><span class="box">✓</span><strong>Rubricas de folha mapeadas para conferência</strong></div>
-        </div>
+    <div class="routine-topbar">
+      <div class="routine-company-tabs">
+        ${["Prodelar", "Colmob", "Servimec"].map((item) => `<button class="company-chip dashboard-company-chip logo-chip ${company === item ? "active" : ""}" data-accounting-company="${item}">${companyLogo(item)}</button>`).join("")}
       </div>
-      <div class="card pad">
-        <div class="section-title"><div><h2>Antes de fechar</h2><p>Atalho para rotina mensal do RH</p></div>${statusPill("Checklist")}</div>
-        <div class="checklist compact-checklist">
-          <div class="check"><span class="box">1</span><div><strong>Subir fichas funcionais</strong><br><span>Quando houver nova base ou admissão.</span></div></div>
-          <div class="check"><span class="box">2</span><div><strong>Subir previsão de férias</strong><br><span>Atualizar as três empresas antes de cobrar líderes.</span></div></div>
-          <div class="check"><span class="box">3</span><div><strong>Subir contracheques</strong><br><span>Separar PDF único em arquivos por colaborador.</span></div></div>
-          <div class="check"><span class="box">4</span><div><strong>Revisar pendências</strong><br><span>Conferir pasta de pendências e importações rejeitadas.</span></div></div>
-        </div>
+      <div class="routine-period-bar compact-period">
+        <button class="btn small" data-accounting-competence="prev">‹ Mês anterior</button>
+        <div><span>Competência</span><strong>${routineCompetenceLabel(competence)}</strong></div>
+        <button class="btn small" data-accounting-competence="current">Mês atual</button>
+        <button class="btn small" data-accounting-competence="next">Próximo mês ›</button>
       </div>
+    </div>
+    ${state.accountingMessage ? `<div class="notice form-notice"><strong>Retorno</strong><p>${escapeHtml(state.accountingMessage)}</p></div>` : ""}
+    <div class="grid metrics routine-summary">
+      ${metric("Arquivos do pacote", `${summary.uploaded}/${summary.total}`, accountingDrivePath(company, competence), "⇪")}
+      ${metric("Status de envio", summary.ready ? "Pronto" : "Pendente", summary.ready ? "Obrigatórios completos" : `${summary.requiredDone}/${summary.requiredTotal} obrigatórios`, "☑")}
+      ${metric("Empresa", company, routineCompetenceLabel(competence), "▦")}
+    </div>
+    <section class="routine-column accounting-package-panel">
+      <div class="routine-column-title"><div><h2>Lista de arquivos do pacote</h2><p>Destino Drive: ${escapeHtml(accountingDrivePath(company, competence))}</p></div>${statusPill(`${summary.uploaded}/${summary.total}`)}</div>
+      <div class="routine-card-list">
+        ${summary.rows.map((item) => `<div class="routine-tile ${item.status?.done ? "done" : "pending"}">
+          <div class="routine-tile-head"><strong>${escapeHtml(item.title)}</strong>${statusPill(item.status?.done ? "Enviado" : item.required ? "Pendente" : "Opcional")}</div>
+          <span>${item.status?.fileName ? escapeHtml(item.status.fileName) : "Selecione o arquivo para salvar a referência no banco."}</span>
+          <label class="routine-file-picker ${item.status?.done ? "done" : "pending"}">
+            <input type="file" data-accounting-upload="${item.key}" data-accounting-company="${company}" data-accounting-competence-value="${competence}" />
+            Selecionar arquivo
+          </label>
+        </div>`).join("")}
+      </div>
+      <button class="btn primary" data-accounting-send ${summary.ready ? "" : "disabled"}>Enviar para contabilidade</button>
+    </section>
+    <div class="card pad routine-history-panel" style="margin-top:16px">
+      <div class="section-title">
+        <div><h2>Histórico</h2><p>Competências anteriores enviadas para contabilidade.</p></div>
+        <button class="btn small" data-accounting-history-toggle>${state.accountingHistoryOpen ? "Ocultar" : "Mostrar"}</button>
+      </div>
+      ${
+        state.accountingHistoryOpen
+          ? `<div class="doc-list">${
+              history.length
+                ? history.map((row) => `<div class="doc"><div><strong>${routineCompetenceLabel(row.competence)}</strong><span>${escapeHtml(row.company)} · ${escapeHtml(row.files)} arquivos · ${formatDateTime(row.sentAt)}</span></div>${statusPill(row.status)}</div>`).join("")
+                : `<div class="empty">Nenhum envio anterior para ${escapeHtml(company)}.</div>`
+            }</div>`
+          : ""
+      }
     </div>`;
 }
 
@@ -6555,6 +6767,10 @@ function handleDelegatedAppClick(event, appRoot) {
       "[data-routine-execute-imports]",
       "[data-routine-execute-monthly]",
       "[data-routine-close-month]",
+      "[data-accounting-company]",
+      "[data-accounting-competence]",
+      "[data-accounting-history-toggle]",
+      "[data-accounting-send]",
       "[data-temporary-routine-new]",
       "[data-temporary-routine-cancel]",
       "[data-temporary-routine-execute]",
@@ -6655,6 +6871,21 @@ function handleDelegatedAppClick(event, appRoot) {
       closeRoutineMonth();
       renderPage();
     }
+  } else if (dataset.accountingCompany !== undefined) {
+    state.accountingCompany = dataset.accountingCompany || "Prodelar";
+    state.accountingMessage = "";
+    renderPage();
+  } else if (dataset.accountingCompetence !== undefined) {
+    if (dataset.accountingCompetence === "prev") state.accountingCompetence = shiftMonthKey(accountingCompetence(), -1);
+    if (dataset.accountingCompetence === "next") state.accountingCompetence = shiftMonthKey(accountingCompetence(), 1);
+    if (dataset.accountingCompetence === "current") state.accountingCompetence = currentMonthKey();
+    state.accountingMessage = "";
+    renderPage();
+  } else if (dataset.accountingHistoryToggle !== undefined) {
+    state.accountingHistoryOpen = !state.accountingHistoryOpen;
+    renderPage();
+  } else if (dataset.accountingSend !== undefined) {
+    sendAccountingPackage();
   } else if (dataset.temporaryRoutineNew !== undefined) {
     state.rhTemporaryModalOpen = true;
     renderPage();
@@ -7012,6 +7243,19 @@ function bind() {
       const file = event.dataTransfer?.files?.[0];
       if (!file) return;
       setRoutineFile(dropzone.dataset.routineCompany || state.company || "Todas", dropzone.dataset.routineDrop, file);
+      renderPage();
+    });
+  });
+  document.querySelectorAll("[data-accounting-upload]").forEach((input) => {
+    input.addEventListener("change", () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      setAccountingPackageFile(
+        input.dataset.accountingCompany || accountingCompany(),
+        input.dataset.accountingCompetenceValue || accountingCompetence(),
+        input.dataset.accountingUpload,
+        file,
+      );
       renderPage();
     });
   });

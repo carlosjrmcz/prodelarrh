@@ -867,6 +867,10 @@ button {
   min-width: 0;
 }
 
+.accounting-package-panel {
+  margin-top: 16px;
+}
+
 .routine-column-title {
   display: flex;
   align-items: flex-start;
