@@ -571,6 +571,7 @@ const state = {
   employeeEditId: "",
   selectedEmployeeId: "EMP-000102",
   detailTab: "ficha",
+  timelineFilter: "all",
   formMessage: "",
   peopleControlActiveModule: "aso",
   peopleControlMessage: "",
@@ -2685,53 +2686,120 @@ function employeeAccounting(employee) {
     </div>`;
 }
 
+function timelineEventIcon(eventType) {
+  const icons = {
+    atestado: "📋",
+    advertencia: "⚠️",
+    advertência: "⚠️",
+    documento: "📄",
+    ponto: "⏰",
+    ferias: "🏖",
+    férias: "🏖",
+    comunicado: "✉️",
+    epi: "🔧",
+    equipment: "🔧",
+    aso: "🏥",
+    admissao: "✅",
+    admissão: "✅",
+    desligamento: "👋",
+  };
+  return icons[eventType] || "•";
+}
+
+function timelineFilterOptions(rows) {
+  const known = ["atestado", "advertencia", "documento", "ponto", "ferias", "comunicado", "epi", "aso", "admissao", "desligamento"];
+  const present = new Set(rows.map((row) => row.eventType).filter(Boolean));
+  return ["all", ...known.filter((type) => present.has(type))];
+}
+
+function timelineFilterLabel(type) {
+  const labels = {
+    all: "Todos",
+    atestado: "Atestados",
+    advertencia: "Advertências",
+    documento: "Documentos",
+    ponto: "Ponto",
+    ferias: "Férias",
+    comunicado: "Comunicados",
+    epi: "EPI",
+    aso: "ASO",
+    admissao: "Admissão",
+    desligamento: "Desligamento",
+  };
+  return labels[type] || type;
+}
+
 function employeeHistoryRows(employee) {
   const realTimelineRows = employeeTimelineEvents
     .filter((event) => event.employee_id && (event.employee_id === employee.dbId || event.employee_id === employee.id))
     .map((event) => ({
       date: event.created_at ? formatDateTime(event.created_at) : "Sem data",
+      sortDate: event.created_at || "",
+      eventType: event.event_type || "",
       title: event.title || event.event_type || "Evento",
       detail: [event.module_name, event.description, event.status].filter(Boolean).join(" · ") || "Evento registrado no Supabase",
+      source: "supabase",
     }));
   const rows = [
     {
       date: employee.admission || "Sem data",
+      sortDate: "",
+      eventType: "admissao",
       title: "Admissão",
       detail: `${employee.role || "Cargo não informado"} · ${employee.department || "Setor não informado"}`,
+      source: "fallback",
     },
     {
       date: "Hoje",
+      sortDate: "",
+      eventType: "colaborador",
       title: "Situação cadastral",
       detail: `${employee.status || "Sem status"} · ${employee.company || "Sem empresa"}`,
+      source: "fallback",
     },
     {
       date: "Hoje",
+      sortDate: "",
+      eventType: "ferias",
       title: "Férias",
       detail: employee.vacation || "Sem programação importada",
+      source: "fallback",
     },
     {
       date: "Hoje",
+      sortDate: "",
+      eventType: "ponto",
       title: "Ponto / banco de horas",
       detail: employee.timeBank || "Sem registro importado",
+      source: "fallback",
     },
   ];
   const peopleEvents = peopleControlEventStore()
     .filter((event) => isSamePerson(event.employeeName, employee.name))
     .map((event) => ({
       date: event.createdAt ? formatDate(event.createdAt) : "Hoje",
+      sortDate: event.at || event.createdAt || "",
+      eventType: peopleControlTimelineType(event.moduleKey, event.values || {}, event.fileName || ""),
       title: event.moduleTitle || "Controle RH",
       detail: event.summary || "Evento lançado em Controles RH",
+      source: "local",
     }));
-  return [...realTimelineRows, ...peopleEvents, ...rows];
+  return [...realTimelineRows, ...peopleEvents, ...rows].sort((a, b) => String(b.sortDate).localeCompare(String(a.sortDate)));
 }
 
 function employeeHistory(employee) {
-  const rows = employeeHistoryRows(employee);
+  const allRows = employeeHistoryRows(employee);
+  const filters = timelineFilterOptions(allRows);
+  const activeFilter = filters.includes(state.timelineFilter) ? state.timelineFilter : "all";
+  const rows = activeFilter === "all" ? allRows : allRows.filter((row) => row.eventType === activeFilter);
   return `
     <div class="card pad">
       <div class="section-title"><div><h2>Histórico do colaborador</h2><p>Eventos funcionais, documentos, férias, ponto e controles lançados pelo RH</p></div>${statusPill(rows.length)}</div>
+      <div class="timeline-filters">
+        ${filters.map((type) => `<button class="chip ${activeFilter === type ? "active" : ""}" data-timeline-filter="${type}">${timelineFilterLabel(type)}</button>`).join("")}
+      </div>
       <div class="timeline">
-        ${rows.map((row) => `<div class="event"><time>${escapeHtml(row.date)}</time><div><strong>${escapeHtml(row.title)}</strong><span>${escapeHtml(row.detail)}</span></div></div>`).join("")}
+        ${rows.map((row) => `<div class="event timeline-event-${escapeHtml(row.eventType || "geral")}"><time>${escapeHtml(row.date)}</time><div><strong><span class="timeline-icon">${timelineEventIcon(row.eventType)}</span>${escapeHtml(row.title)}</strong><span>${escapeHtml(row.detail)}</span></div></div>`).join("")}
       </div>
     </div>`;
 }
@@ -3545,9 +3613,10 @@ function teamPointAdjustmentsForCurrentUser() {
 }
 
 function updatePointAdjustment(id, patch) {
+  let changedRecord = null;
   const updated = pointAdjustmentStore().map((record) => {
     if (record.id !== id) return record;
-    return {
+    changedRecord = {
       ...record,
       ...patch,
       history: [
@@ -3561,8 +3630,20 @@ function updatePointAdjustment(id, patch) {
         },
       ],
     };
+    return changedRecord;
   });
   savePointAdjustmentStore(updated);
+  if (changedRecord && ["Aprovado", "Concluído"].includes(changedRecord.status)) {
+    const employee = employees.find((item) => isSamePerson(item.name, changedRecord.employeeName));
+    void recordTimeline(
+      employee?.dbId || employee?.id,
+      "ponto",
+      `Ajuste de ponto: ${changedRecord.reason || "Ajuste aprovado"}`,
+      changedRecord.comment || "",
+      "ajustado",
+      { point_adjustment_id: changedRecord.id, date: changedRecord.date, owner: changedRecord.owner },
+    );
+  }
   state.pointMessage = "Ajuste de ponto movimentado.";
   renderPage();
 }
@@ -5174,10 +5255,45 @@ function peopleControlEventSummaryFromValues(values = {}, fileName = "") {
   return filledValues.join(" · ");
 }
 
+function peopleControlTimelineType(moduleKey, values = {}, fileName = "") {
+  const freeType = normalizeText(values["Tipo de controle"] || values.Tipo || values.Movimento || "");
+  if (freeType.includes("advert")) return "advertencia";
+  if (moduleKey === "medical") return "atestado";
+  if (moduleKey === "equipment") return "epi";
+  if (moduleKey === "aso") return "aso";
+  if (moduleKey === "communications") return "comunicado";
+  if (fileName || Object.keys(values).some((key) => normalizeText(key).includes("documento"))) return "documento";
+  return moduleKey || "controle_rh";
+}
+
+function peopleControlTimelineTitle(module, eventType, values = {}, fileName = "") {
+  const typeValue = values["Tipo de controle"] || values.Tipo || values.Movimento || "";
+  if (eventType === "atestado") return "Atestado médico registrado";
+  if (eventType === "advertencia") return "Advertência registrada";
+  if (eventType === "documento") return `Documento adicionado: ${typeValue || values.Documento || fileName || module.title}`;
+  if (eventType === "epi") return `EPI entregue: ${values.Item || module.title}`;
+  if (eventType === "aso") return "ASO registrado/renovado";
+  if (eventType === "comunicado") return `E-mail enviado: ${values.Título || module.title}`;
+  return `${module.title} registrado`;
+}
+
+function peopleControlTimelineStatus(eventType) {
+  const statuses = {
+    documento: "adicionado",
+    comunicado: "enviado",
+    epi: "entregue",
+    aso: "registrado",
+    atestado: "registrado",
+    advertencia: "registrado",
+  };
+  return statuses[eventType] || "registrado";
+}
+
 function savePeopleControlEvent(moduleKey) {
   const module = peopleControlModules.find((item) => item.key === moduleKey) || peopleControlModules[0];
   const employeeSelect = document.querySelector(`[data-people-control-employee="${moduleKey}"]`);
   const employeeName = employeeSelect?.value || currentUser.name;
+  const employee = employees.find((item) => isSamePerson(item.name, employeeName));
   const values = {};
   document.querySelectorAll(`[data-people-control-field^="${moduleKey}:"]`).forEach((field) => {
     const key = field.dataset.peopleControlField.split(":").slice(1).join(":");
@@ -5202,6 +5318,16 @@ function savePeopleControlEvent(moduleKey) {
     summary,
   };
   savePeopleControlEventStore([entry, ...peopleControlEventStore()]);
+  const timelineType = peopleControlTimelineType(moduleKey, values, fileName);
+  const timelineTitle = peopleControlTimelineTitle(module, timelineType, values, fileName);
+  if (employee?.dbId || employee?.id) {
+    void recordTimeline(employee.dbId || employee.id, timelineType, timelineTitle, summary || module.description || "", peopleControlTimelineStatus(timelineType), {
+      people_control_id: entry.id,
+      module_key: moduleKey,
+      file_name: fileName,
+      values,
+    });
+  }
   state.peopleControlMessage = `${module.title} registrado para ${employeeName}. ${summary ? `${summary}. ` : ""}Lançamento salvo na rotina de Controles RH e vinculado à linha do tempo do colaborador.`;
   renderPage();
 }
@@ -6089,6 +6215,18 @@ async function recordEmployeeTimeline({
   }
 }
 
+async function recordTimeline(employeeId, eventType, title, description, status, metadata = {}) {
+  return recordEmployeeTimeline({
+    employeeId,
+    eventType,
+    moduleName: eventType,
+    title,
+    description,
+    status,
+    metadata,
+  });
+}
+
 function saveVacationEdit(key, patch) {
   const index = vacationForecasts.findIndex((row) => vacationKey(row) === key);
   if (index < 0) return;
@@ -6135,13 +6273,15 @@ function submitVacationForReview(key) {
   vacationForecasts = vacationForecasts.map((item) => (vacationKey(item) === key ? { ...item, ...saved[key] } : item));
   markRuntimeIndexesDirty();
   state.vacationMessage = `Programação de ${row.employee_name} submetida para avaliação.`;
+  const vacationPeriod = `${row.planned_start} a ${row.planned_end}`;
+  const vacationChanged = row.status === "edited";
   void recordEmployeeTimeline({
     employee: employees.find((employee) => isSamePerson(employee.name, row.employee_name)),
     eventType: "ferias",
     moduleName: "ferias",
-    title: "Programação de férias submetida",
-    description: `${row.planned_start} a ${row.planned_end}`,
-    status: "waiting_review",
+    title: vacationChanged ? `Férias alteradas: ${vacationPeriod}` : `Férias aprovadas: ${vacationPeriod}`,
+    description: vacationPeriod,
+    status: vacationChanged ? "alterado" : "aprovado",
     metadata: { vacation_key: key, company: row.company_key || row.source_company || row.company || "" },
   });
   renderPage();
@@ -6365,13 +6505,15 @@ function submitAllVacationChanges() {
     };
     localStorage.setItem("rhVacationEdits", JSON.stringify(saved));
     vacationForecasts = vacationForecasts.map((item) => (vacationKey(item) === key ? { ...item, ...saved[key] } : item));
+    const vacationPeriod = `${row.planned_start} a ${row.planned_end}`;
+    const vacationChanged = row.status === "edited";
     void recordEmployeeTimeline({
       employee: employees.find((employee) => isSamePerson(employee.name, row.employee_name)),
       eventType: "ferias",
       moduleName: "ferias",
-      title: "Programação de férias enviada em lote",
-      description: `${row.planned_start} a ${row.planned_end}`,
-      status: "waiting_review",
+      title: vacationChanged ? `Férias alteradas: ${vacationPeriod}` : `Férias aprovadas: ${vacationPeriod}`,
+      description: vacationPeriod,
+      status: vacationChanged ? "alterado" : "aprovado",
       metadata: { vacation_key: key, company: row.company_key || row.source_company || row.company || "" },
     });
   });
@@ -6454,6 +6596,7 @@ function handleDelegatedAppClick(event, appRoot) {
       "[data-employee-status-save]",
       "[data-employee-save]",
       "[data-detail-tab]",
+      "[data-timeline-filter]",
       "[data-operational-scope]",
       "[data-action]",
       "[data-request-company]",
@@ -6629,6 +6772,7 @@ function handleDelegatedAppClick(event, appRoot) {
   } else if (dataset.employee !== undefined) {
     state.selectedEmployeeId = dataset.employee;
     state.detailTab = "ficha";
+    state.timelineFilter = "all";
     state.page = "employeeDetail";
     renderPage();
   } else if (dataset.employeeCompany !== undefined) {
@@ -6649,6 +6793,9 @@ function handleDelegatedAppClick(event, appRoot) {
     saveEmployeeDetails(dataset.employeeSave);
   } else if (dataset.detailTab !== undefined) {
     state.detailTab = dataset.detailTab;
+    renderPage();
+  } else if (dataset.timelineFilter !== undefined) {
+    state.timelineFilter = dataset.timelineFilter || "all";
     renderPage();
   } else if (dataset.operationalScope !== undefined) {
     markOperationalAction(dataset.operationalScope, dataset.operationalKey, dataset.operationalLabel || "Item registrado e removido da fila operacional.");
@@ -7169,12 +7316,12 @@ async function handleEmployeeSubmit(event) {
     void recordEmployeeTimeline({
       employeeId: persisted.employeeId,
       eventType: "admissao",
-      moduleName: "colaboradores",
-      title: "Cadastro inicial criado",
-      description: `Colaborador criado pelo formulário do RH com código ${persisted.employeeCode}.`,
+      moduleName: "admissao",
+      title: "Admissão concluída",
+      description: `Colaborador admitido pelo formulário do RH com código ${persisted.employeeCode}.`,
       relatedTable: "hr_employees",
       relatedRecordId: persisted.employeeId,
-      status: "active",
+      status: "concluido",
     });
     await loadSupabaseData();
     const savedEmployee = employees.find((item) => item.id === persisted.employeeCode);
@@ -7255,6 +7402,10 @@ async function handleAnnouncementSubmit(event) {
   }
 
   state.announcementResult = `Comunicado enfileirado para ${employee.name}. Evento ${result.id} com status ${result.status}.`;
+  void recordTimeline(employee.dbId || employee.id, "comunicado", `E-mail enviado: ${subject}`, "comunicado_avulso_individual", "enviado", {
+    email_event_id: result.id,
+    template_key: "comunicado_avulso_individual",
+  });
   state.announcementSubject = "";
   state.announcementMessage = "";
   renderPage();
@@ -7348,6 +7499,11 @@ async function handleCommunicationSubmit(event) {
   }
 
   state.communicationMessage = `Comunicado enfileirado para ${employee.name}. Evento ${data.id} com status ${data.status}.`;
+  void recordTimeline(employee.dbId || employee.id, "comunicado", `E-mail enviado: ${eventRow.subject}`, template.template_key, "enviado", {
+    email_event_id: data.id,
+    template_key: template.template_key,
+    scheduled_for: scheduledFor,
+  });
   state.communicationModalOpen = false;
   state.communicationRecipientQuery = "";
   state.communicationEmployeeId = "";
@@ -7535,13 +7691,13 @@ async function saveEmployeeStatus(employeeId, status) {
 
   await recordEmployeeTimeline({
     employee,
-    eventType: "colaborador",
-    moduleName: "colaboradores",
-    title: "Status do colaborador atualizado",
+    eventType: status === "Desligado" ? "desligamento" : "colaborador",
+    moduleName: status === "Desligado" ? "desligamento" : "colaboradores",
+    title: status === "Desligado" ? "Desligamento registrado" : "Status do colaborador atualizado",
     description: `${oldStatus} → ${status}`,
     relatedTable: "hr_employees",
     relatedRecordId: employee.dbId,
-    status,
+    status: status === "Desligado" ? "registrado" : status,
   });
   await loadSupabaseData();
 }

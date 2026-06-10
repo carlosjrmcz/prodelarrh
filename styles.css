@@ -2192,6 +2192,36 @@ td {
   flex: 0 0 auto;
 }
 
+.timeline-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.timeline-filters .chip {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #ffffff;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 7px 11px;
+}
+
+.timeline-filters .chip.active {
+  background: #1a5c3a;
+  border-color: #1a5c3a;
+  color: #ffffff;
+}
+
+.timeline-icon {
+  display: inline-block;
+  margin-right: 8px;
+  width: 22px;
+}
+
 .timeline {
   position: relative;
   display: grid;
