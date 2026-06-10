@@ -960,6 +960,138 @@ button {
   overflow: auto;
 }
 
+.communication-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.communication-header h2 {
+  margin: 0;
+  font-size: 24px;
+}
+
+.communication-header p {
+  margin: 4px 0 0;
+  color: var(--muted);
+}
+
+.communication-status-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.communication-status-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px;
+  display: grid;
+  gap: 6px;
+}
+
+.communication-status-card span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.communication-status-card strong {
+  font-size: 24px;
+  color: var(--ink);
+}
+
+.communication-status-card.review,
+.communication-badge.review,
+.communication-row.review {
+  background: #faeeda;
+}
+
+.communication-status-card.pending,
+.communication-badge.pending,
+.communication-row.pending {
+  background: #e6f1fb;
+}
+
+.communication-status-card.processing,
+.communication-badge.processing,
+.communication-row.processing {
+  background: #fee8d6;
+}
+
+.communication-status-card.sent,
+.communication-badge.sent,
+.communication-row.sent {
+  background: #eaf3de;
+}
+
+.communication-status-card.failed,
+.communication-badge.failed,
+.communication-row.failed {
+  background: #fcebeb;
+}
+
+.communication-status-card.cancelled,
+.communication-badge.cancelled,
+.communication-row.cancelled {
+  background: #f1f5f7;
+}
+
+.communication-panel {
+  margin-top: 16px;
+}
+
+.communication-table-title {
+  padding: 14px 14px 0;
+}
+
+.compact-search {
+  display: grid;
+  gap: 4px;
+  min-width: min(320px, 100%);
+}
+
+.compact-search span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.communication-badge {
+  border-radius: 999px;
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 5px 9px;
+}
+
+.table-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.communication-modal {
+  width: min(820px, 100%);
+}
+
+.check-inline {
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: flex;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 12px;
+}
+
+.communication-preview {
+  margin-top: 14px;
+}
+
 .period-actions,
 .routine-filter-row,
 .task-actions {
@@ -2560,6 +2692,7 @@ td {
   .grid.three,
   .rh-routines-layout,
   .routine-board-three,
+  .communication-status-grid,
   .routine-grid,
   .master-editor-grid,
   .paystub-filter-grid,
@@ -2575,7 +2708,9 @@ td {
 
   .routine-column-title,
   .routine-tile-head,
-  .routine-close-month {
+  .routine-close-month,
+  .communication-header,
+  .communication-table-title {
     align-items: stretch;
     flex-direction: column;
   }

@@ -580,6 +580,18 @@ const state = {
   announcementMessage: "",
   announcementResult: "",
   emailReviewMessage: "",
+  communicationMessage: "",
+  communicationQueueQuery: "",
+  communicationTemplateQuery: "",
+  communicationRecipientQuery: "",
+  communicationModalOpen: false,
+  communicationTemplateKey: "",
+  communicationEmployeeId: "",
+  communicationRecurrence: "unico",
+  communicationScheduleEnabled: false,
+  communicationScheduledAt: "",
+  communicationDeadline: "",
+  communicationNote: "",
   rhTaskMessage: "",
   rhTaskStatusFilter: "open",
   rhTaskTypeFilter: "all",
@@ -1974,13 +1986,13 @@ async function loadSupabaseDataFresh() {
         .limit(500),
       supabaseClient
         .from("email_events")
-        .select("id,app_name,module_name,event_type,employee_id,employee_name,recipient_email,recipient_name,recipient_type,subject,template_key,payload,status,created_by,created_at,scheduled_for,last_error")
-        .eq("status", "waiting_review")
+        .select("id,app_name,module_name,event_type,employee_id,employee_name,recipient_email,recipient_name,recipient_type,subject,template_key,payload,status,attempts,created_by,created_at,scheduled_for,sent_at,last_error")
+        .in("status", ["waiting_review", "pending", "processing", "sent", "failed", "cancelled"])
         .order("created_at", { ascending: false })
-        .limit(100),
+        .limit(300),
       supabaseClient
         .from("email_templates")
-        .select("template_key,subject_template,body_template,body_html_template")
+        .select("template_key,module_name,recipient_type,subject_template,body_template,body_html_template,delivery_channel,audience_scope,requires_review,is_active")
         .eq("app_name", "recursos_humanos"),
     ]);
 
@@ -2103,16 +2115,24 @@ async function loadSupabaseDataFresh() {
       template_key: row.template_key || "",
       payload: row.payload || {},
       status: row.status || "",
+      attempts: row.attempts || 0,
       created_by: row.created_by || "",
       created_at: row.created_at || "",
       scheduled_for: row.scheduled_for || "",
+      sent_at: row.sent_at || "",
       last_error: row.last_error || "",
     }));
     emailTemplateRows = (emailTemplateResult.data || []).map((row) => ({
       template_key: row.template_key || "",
+      module_name: row.module_name || "",
+      recipient_type: row.recipient_type || "",
       subject_template: row.subject_template || "",
       body_template: row.body_template || "",
       body_html_template: row.body_html_template || "",
+      delivery_channel: row.delivery_channel || "",
+      audience_scope: row.audience_scope || "",
+      requires_review: Boolean(row.requires_review),
+      is_active: row.is_active !== false,
     }));
     state.vacationMessage = vacationForecasts.length ? "" : "Nenhuma previsão de férias cadastrada no Supabase.";
     applySimulationHierarchy();
@@ -5500,67 +5520,230 @@ function paystubsPage() {
     </div>`;
 }
 
-function emailsPage() {
-  const templates = [
-    ["Documentos pendentes", "Admissão/documentos", "Colaborador", "E-mail + App", "Individual", "Pronto"],
-    ["Boas-vindas ao colaborador", "Primeiro dia", "Colaborador", "E-mail + App", "Individual", "Pronto"],
-    ["Novo colaborador no grupo", "Admissão coletiva", "Grupo econômico", "E-mail + App", "Coletivo", "Revisão RH"],
-    ["Documento vencendo", "CNH, ASO ou documento com validade", "Colaborador/RH", "E-mail + App", "Individual", "Pronto"],
-    ["ASO vencendo", "Saúde ocupacional", "RH", "E-mail + App", "Individual", "Revisão RH"],
-    ["ASO vencido", "Saúde ocupacional crítica", "RH", "E-mail + App", "Individual", "Revisão RH"],
-    ["Férias aprovadas", "Programação aprovada", "Colaborador", "E-mail + App", "Individual", "Pronto"],
-    ["Férias alteradas", "Programação alterada", "Colaborador/Líder", "App / E-mail + App", "Individual", "Pronto"],
-    ["Férias próximas", "Lembrete antes do início", "Colaborador", "E-mail + App", "Individual", "Pronto"],
-    ["Retorno de férias", "Lembrete de retorno", "Colaborador", "E-mail + App", "Individual", "Pronto"],
-    ["Pendência de ponto", "Correção ou justificativa", "Colaborador", "E-mail + App", "Individual", "Pronto"],
-    ["Ajuste de ponto para aprovação", "Liderança aprova ponto", "Gestor", "E-mail + App", "Individual", "Pronto"],
-    ["Atestado pendente", "Validação RH sem detalhe médico", "RH", "E-mail + App", "Individual", "Revisão RH"],
-    ["Experiência 45 dias", "Alerta para líder/RH", "Gestor", "E-mail + App", "Individual", "Pronto"],
-    ["Experiência 90 dias", "Alerta para líder/RH", "Gestor", "E-mail + App", "Individual", "Pronto"],
-    ["Avaliação pendente", "Avaliação de colaborador", "Gestor", "E-mail + App", "Individual", "Pronto"],
-    ["Treinamento pendente", "Certificação obrigatória", "Colaborador", "E-mail + App", "Individual", "Pronto"],
-    ["Benefício solicitado", "Análise de benefício", "RH", "E-mail + App", "Individual", "Pronto"],
-    ["Benefício aprovado", "Resposta ao colaborador", "Colaborador", "App", "Individual", "Pronto"],
-    ["Benefício pendente", "Pendência sensível", "Colaborador", "App", "Individual", "Revisão RH"],
-    ["Dados bancários pendentes", "Correção de dados", "Colaborador", "E-mail + App", "Individual", "Revisão RH"],
-    ["EPI/equipamento pendente", "Entrega ou devolução", "RH", "E-mail + App", "Individual", "Pronto"],
-    ["Comunicado do mural", "Mural com leitura confirmada", "Colaboradores", "App", "Coletivo", "Pronto"],
-    ["Leitura pendente de comunicado", "Confirmação de leitura", "Colaborador", "App", "Individual", "Pronto"],
-    ["Contracheque disponível", "Folha/contracheque", "Colaborador", "E-mail + App", "Individual", "Pronto"],
-    ["Pendências de desligamento", "Processo sensível", "Colaborador", "E-mail + App", "Individual", "Revisão RH"],
-    ["Desligamento comunicado ao grupo", "Comunicado coletivo cuidadoso", "Grupo econômico", "E-mail + App", "Coletivo", "Revisão RH"],
-    ["Validação interna do RH", "Pendência operacional interna", "RH", "E-mail + App", "Individual", "Revisão RH"],
-  ];
+function communicationStatusMeta(status) {
+  const map = {
+    waiting_review: ["Aguardando revisão", "review"],
+    pending: ["Agendado", "pending"],
+    processing: ["Processando", "processing"],
+    sent: ["Enviado", "sent"],
+    failed: ["Falha", "failed"],
+    cancelled: ["Cancelado", "cancelled"],
+  };
+  return map[status] || [status || "Sem status", "pending"];
+}
 
-  return `
-    <div class="grid two">
-      <div class="card pad">
-        <div class="section-title"><div><h2>Fila de envio</h2><p>Disparo real pausado até configurar Google Workspace e Edge Functions</p></div>${statusPill("Pré-configurada")}</div>
-        <div class="checklist">
-          <div class="check done"><span class="box">✓</span><div><strong>Envio automático pausado</strong><br><span>Solicitações e cadastros não travam enquanto o Google Workspace não for ativado</span></div></div>
-          <div class="check done"><span class="box">✓</span><div><strong>Fila real vazia</strong><br><span>Nenhum evento pendente precisa ser liberado no Supabase agora</span></div></div>
-          <div class="check done"><span class="box">✓</span><div><strong>email_templates</strong><br><span>Modelos por chave e app_name = recursos_humanos</span></div></div>
-          <div class="check done"><span class="box">✓</span><div><strong>Canal definido</strong><br><span>Templates marcados como E-mail, App ou E-mail + App</span></div></div>
-          <div class="check done"><span class="box">✓</span><div><strong>Envio individual/coletivo</strong><br><span>Comunicações de grupo ficam separadas dos avisos individuais</span></div></div>
-          <div class="check done"><span class="box">✓</span><div><strong>email_events</strong><br><span>Fila pending, waiting_review, processing, sent, failed</span></div></div>
-          <div class="check done"><span class="box">✓</span><div><strong>email_delivery_logs</strong><br><span>Histórico de provider, teste, destinatário real e erro</span></div></div>
-          <div class="check done"><span class="box">✓</span><div><strong>claim_pending_email_events</strong><br><span>Processamento seguro por lote, sem envio duplicado</span></div></div>
+function communicationEventMatches(event, query) {
+  if (!query) return true;
+  return [event.recipient_name, event.recipient_email, event.template_key, event.event_type, event.subject]
+    .some((value) => normalizeText(value).includes(query));
+}
+
+function communicationTemplateMatches(template, query) {
+  if (!query) return true;
+  return [template.template_key, template.module_name, template.recipient_type, template.subject_template, template.delivery_channel, template.audience_scope]
+    .some((value) => normalizeText(value).includes(query));
+}
+
+function communicationEmployeeOptions() {
+  const query = normalizeText(state.communicationRecipientQuery);
+  return employees
+    .filter((employee) => employeeStatus(employee) === "Ativo")
+    .filter((employee) => !query || [employee.name, employee.company, employee.department, employee.role, employee.email].some((value) => normalizeText(value).includes(query)))
+    .sort((a, b) => a.name.localeCompare(b.name, "pt-BR"))
+    .slice(0, 30);
+}
+
+function selectedCommunicationEmployee() {
+  return employees.find((employee) => employee.id === state.communicationEmployeeId || employee.dbId === state.communicationEmployeeId) || null;
+}
+
+function selectedCommunicationTemplate() {
+  return emailTemplateRows.find((template) => template.template_key === state.communicationTemplateKey) || emailTemplateRows[0] || null;
+}
+
+function communicationTemplateLabel(template) {
+  if (!template) return "Sem template";
+  return `${template.template_key}${template.subject_template ? ` · ${template.subject_template}` : ""}`;
+}
+
+function communicationStatusCards() {
+  const counts = {
+    waiting_review: emailReviewEvents.filter((event) => event.status === "waiting_review").length,
+    pending: emailReviewEvents.filter((event) => event.status === "pending").length,
+    processing: emailReviewEvents.filter((event) => event.status === "processing").length,
+    sent: emailReviewEvents.filter((event) => event.status === "sent").length,
+    failed: emailReviewEvents.filter((event) => event.status === "failed").length,
+  };
+  return [
+    ["waiting_review", "Aguardando revisão", counts.waiting_review],
+    ["pending", "Agendados", counts.pending],
+    ["processing", "Processando", counts.processing],
+    ["sent", "Enviados", counts.sent],
+    ["failed", "Falhas", counts.failed],
+  ].map(([status, label, count]) => `<div class="communication-status-card ${communicationStatusMeta(status)[1]}"><span>${escapeHtml(label)}</span><strong>${count}</strong></div>`).join("");
+}
+
+function communicationQueueRows() {
+  const query = normalizeText(state.communicationQueueQuery);
+  return emailReviewEvents
+    .filter((event) => !["sent", "cancelled"].includes(event.status))
+    .filter((event) => communicationEventMatches(event, query))
+    .sort((a, b) => String(a.scheduled_for || a.created_at).localeCompare(String(b.scheduled_for || b.created_at)))
+    .slice(0, 80);
+}
+
+function communicationSentRows() {
+  return emailReviewEvents
+    .filter((event) => event.status === "sent")
+    .sort((a, b) => String(b.sent_at || b.created_at).localeCompare(String(a.sent_at || a.created_at)))
+    .slice(0, 20);
+}
+
+function communicationTemplateRows() {
+  const query = normalizeText(state.communicationTemplateQuery);
+  return emailTemplateRows
+    .filter((template) => template.is_active !== false)
+    .filter((template) => communicationTemplateMatches(template, query))
+    .sort((a, b) => a.template_key.localeCompare(b.template_key, "pt-BR"))
+    .slice(0, 80);
+}
+
+function communicationQueueTable() {
+  const rows = communicationQueueRows();
+  return `<div class="card table-wrap communication-panel">
+    <div class="section-title communication-table-title">
+      <div><h2>Fila em andamento</h2><p>Eventos pendentes, em revisão, processando ou com falha.</p></div>
+      <label class="compact-search"><span>Busca</span><input id="communication-queue-search" value="${escapeHtml(state.communicationQueueQuery)}" placeholder="Destinatário, template ou evento" /></label>
+    </div>
+    <table>
+      <thead><tr><th>Status</th><th>Destinatário</th><th>Template</th><th>Agendado</th><th>Tentativas</th><th>Ações</th></tr></thead>
+      <tbody>
+        ${
+          rows.length
+            ? rows.map((event) => {
+                const [label, klass] = communicationStatusMeta(event.status);
+                return `<tr class="communication-row ${klass}">
+                  <td><span class="communication-badge ${klass}">${escapeHtml(label)}</span></td>
+                  <td><strong>${escapeHtml(event.recipient_name || "Sem nome")}</strong><br><span>${escapeHtml(event.recipient_email || "sem e-mail")}</span></td>
+                  <td><strong>${escapeHtml(event.template_key || "Sem template")}</strong><br><span>${escapeHtml(event.event_type || event.module_name || "sem evento")}</span></td>
+                  <td>${event.scheduled_for ? formatDateTime(event.scheduled_for) : "Agora"}</td>
+                  <td>${event.attempts || 0}</td>
+                  <td class="table-actions">
+                    <button class="btn small" data-communication-release="${event.id}" ${event.status === "waiting_review" && canReviewEmails() ? "" : "disabled"}>Liberar</button>
+                    <button class="btn small danger" data-communication-cancel="${event.id}" ${["sent", "cancelled"].includes(event.status) ? "disabled" : ""}>Cancelar</button>
+                    <button class="btn small" data-communication-error="${event.id}" ${event.last_error ? "" : "disabled"}>Ver erro</button>
+                  </td>
+                </tr>`;
+              }).join("")
+            : `<tr><td colspan="6"><div class="empty">Nenhum evento em andamento para esta busca.</div></td></tr>`
+        }
+      </tbody>
+    </table>
+  </div>`;
+}
+
+function communicationSentTable() {
+  const rows = communicationSentRows();
+  return `<div class="card table-wrap communication-panel">
+    <div class="section-title"><div><h2>Últimos enviados</h2><p>Eventos concluídos pelo worker de e-mail.</p></div>${statusPill(`${rows.length}`)}</div>
+    <table>
+      <thead><tr><th>Enviado em</th><th>Destinatário</th><th>Template</th><th>Assunto</th></tr></thead>
+      <tbody>
+        ${
+          rows.length
+            ? rows.map((event) => {
+                const preview = emailReviewPreview(event);
+                return `<tr><td>${event.sent_at ? formatDateTime(event.sent_at) : formatDateTime(event.created_at)}</td><td><strong>${escapeHtml(event.recipient_name || "Sem nome")}</strong><br><span>${escapeHtml(event.recipient_email || "")}</span></td><td>${escapeHtml(event.template_key || "")}</td><td>${escapeHtml(preview.subject || event.subject || "")}</td></tr>`;
+              }).join("")
+            : `<tr><td colspan="4"><div class="empty">Nenhum envio concluído carregado.</div></td></tr>`
+        }
+      </tbody>
+    </table>
+  </div>`;
+}
+
+function communicationTemplatesTable() {
+  const rows = communicationTemplateRows();
+  return `<div class="card table-wrap communication-panel">
+    <div class="section-title communication-table-title">
+      <div><h2>Templates disponíveis</h2><p>Modelos ativos de comunicação do RH.</p></div>
+      <label class="compact-search"><span>Busca</span><input id="communication-template-search" value="${escapeHtml(state.communicationTemplateQuery)}" placeholder="Palavra-chave do template" /></label>
+    </div>
+    <table>
+      <thead><tr><th>Template</th><th>Módulo</th><th>Gatilho</th><th>Público</th><th>Canal</th></tr></thead>
+      <tbody>
+        ${
+          rows.length
+            ? rows.map((template) => `<tr><td><strong>${escapeHtml(template.template_key)}</strong><br><span>${escapeHtml(template.subject_template || "")}</span></td><td>${escapeHtml(template.module_name || "NÃO ENCONTRADO")}</td><td>${escapeHtml(template.template_key || "NÃO ENCONTRADO")}</td><td>${escapeHtml(template.audience_scope || template.recipient_type || "NÃO ENCONTRADO")}</td><td>${escapeHtml(template.delivery_channel || "NÃO ENCONTRADO")}</td></tr>`).join("")
+            : `<tr><td colspan="5"><div class="empty">Nenhum template encontrado.</div></td></tr>`
+        }
+      </tbody>
+    </table>
+  </div>`;
+}
+
+function communicationModal() {
+  const templateOptions = emailTemplateRows.filter((template) => template.is_active !== false);
+  const employeeOptions = communicationEmployeeOptions();
+  const selectedEmployee = selectedCommunicationEmployee();
+  const selectedTemplate = selectedCommunicationTemplate();
+  return `<div class="modal-backdrop">
+    <form class="modal card pad communication-modal" id="communication-form">
+      <div class="section-title">
+        <div><h2>Novo comunicado</h2><p>Selecione template, destinatário e regra de envio.</p></div>
+        <button class="btn small" type="button" data-communication-modal-close>Cancelar</button>
+      </div>
+      <div class="form-grid">
+        <label class="form-field full"><span>Buscar template por palavra-chave</span><input id="communication-template-query" value="${escapeHtml(state.communicationTemplateQuery)}" placeholder="Ex.: férias, ponto, comunicado" /></label>
+        <label class="form-field full"><span>Template</span><select id="communication-template-select" name="templateKey" required>
+          ${templateOptions.map((template) => `<option value="${escapeHtml(template.template_key)}" ${template.template_key === (state.communicationTemplateKey || selectedTemplate?.template_key) ? "selected" : ""}>${escapeHtml(communicationTemplateLabel(template))}</option>`).join("")}
+        </select></label>
+        <label class="form-field full"><span>Buscar colaborador por nome</span><input id="communication-recipient-query" value="${escapeHtml(state.communicationRecipientQuery)}" placeholder="Nome, empresa ou e-mail" /></label>
+        <label class="form-field full"><span>Colaborador</span><select id="communication-employee-select" name="employeeId" required>
+          <option value="">Selecione</option>
+          ${employeeOptions.map((employee) => `<option value="${employee.dbId || employee.id}" ${employee.dbId === state.communicationEmployeeId || employee.id === state.communicationEmployeeId ? "selected" : ""}>${escapeHtml(employee.name)} · ${escapeHtml(employee.company)} · ${escapeHtml(employee.email || "sem e-mail")}</option>`).join("")}
+        </select></label>
+        <label class="form-field"><span>Recorrência</span><select id="communication-recurrence" name="recurrence">
+          ${[["unico", "Único"], ["semanal", "Semanal"], ["quinzenal", "Quinzenal"], ["mensal", "Mensal"]].map(([value, label]) => `<option value="${value}" ${state.communicationRecurrence === value ? "selected" : ""}>${label}</option>`).join("")}
+        </select></label>
+        <label class="form-field"><span>Agendar envio</span><span class="check-inline"><input id="communication-schedule-enabled" type="checkbox" ${state.communicationScheduleEnabled ? "checked" : ""} /> Usar data/hora</span></label>
+        <label class="form-field"><span>Data/hora</span><input id="communication-scheduled-at" type="datetime-local" value="${escapeHtml(state.communicationScheduledAt)}" ${state.communicationScheduleEnabled ? "" : "disabled"} /></label>
+        <label class="form-field"><span>Prazo</span><input id="communication-deadline" value="${escapeHtml(state.communicationDeadline)}" placeholder="Ex.: até sexta-feira" /></label>
+        <label class="form-field full"><span>Observação/complemento</span><textarea id="communication-note" rows="4" placeholder="Texto livre para entrar no payload do comunicado.">${escapeHtml(state.communicationNote)}</textarea></label>
+      </div>
+      <div class="email-preview-card communication-preview">
+        <div class="preview-header"><span>Recursos Humanos · Grupo Prodelar</span><strong>${escapeHtml(selectedTemplate?.subject_template || selectedTemplate?.template_key || "Template")}</strong></div>
+        <div class="preview-body">
+          <p>Para: <strong>${escapeHtml(selectedEmployee?.name || "Selecione um colaborador")}</strong></p>
+          <p>${escapeHtml(selectedEmployee ? `${selectedEmployee.company} · ${selectedEmployee.email || "sem e-mail"}` : "A prévia será completada ao selecionar o destinatário.")}</p>
         </div>
       </div>
-      <div class="card pad">
-        <div class="section-title"><div><h2>Próxima ativação</h2><p>Depende de secrets no Supabase Edge Function</p></div></div>
-        <div class="codebox">SUPABASE_SERVICE_ROLE_KEY<br>GOOGLE_WORKSPACE_SENDER_EMAIL<br>GOOGLE_WORKSPACE_CLIENT_ID<br>GOOGLE_WORKSPACE_CLIENT_SECRET<br>GOOGLE_WORKSPACE_REFRESH_TOKEN<br>GOOGLE_DRIVE_SHARED_DRIVE_ID<br>GOOGLE_DRIVE_ROOT_FOLDER_ID<br>GOOGLE_IMPERSONATE_EMAIL<br>EMAIL_TEST_MODE=true</div>
-        <div class="notice" style="margin-top:14px"><strong>Regra de segurança</strong><p>O frontend nunca guarda segredo do Google. E-mails e uploads reais passam por Edge Functions do Supabase; o app só recebe links e metadados.</p></div>
+      <div class="form-actions full">
+        <button class="btn" type="button" data-communication-modal-close>Cancelar</button>
+        <button class="btn primary" type="submit">Enviar comunicado →</button>
+      </div>
+    </form>
+  </div>`;
+}
+
+function emailsPage() {
+  return `
+    <div class="communication-header">
+      <div>
+        <h2>Central de Comunicação RH</h2>
+        <p>Controle de fila, templates, revisão, agendamentos e comunicados avulsos.</p>
+      </div>
+      <div class="header-actions">
+        <button class="btn primary" data-communication-new>+ Novo comunicado</button>
+        <button class="btn" data-communication-refresh>Atualizar</button>
       </div>
     </div>
-    <div class="card table-wrap" style="margin-top:16px">
-      <table>
-        <thead><tr><th>Template</th><th>Evento</th><th>Destinatário típico</th><th>Canal</th><th>Envio</th><th>Status</th></tr></thead>
-        <tbody>
-          ${templates.map(([name, event, recipient, channel, scope, status]) => `<tr><td><strong>${name}</strong></td><td>${event}</td><td>${recipient}</td><td>${channel}</td><td>${scope}</td><td>${statusPill(status)}</td></tr>`).join("")}
-        </tbody>
-      </table>
-    </div>`;
+    ${state.communicationMessage ? `<div class="notice form-notice"><strong>Retorno</strong><p>${escapeHtml(state.communicationMessage)}</p></div>` : ""}
+    <div class="communication-status-grid">${communicationStatusCards()}</div>
+    ${communicationQueueTable()}
+    ${communicationSentTable()}
+    ${communicationTemplatesTable()}
+    ${state.communicationModalOpen ? communicationModal() : ""}`;
 }
 
 function canSendAnnouncements() {
@@ -6251,6 +6434,12 @@ function handleDelegatedAppClick(event, appRoot) {
       "[data-announcement-employee]",
       "[data-email-review-approve]",
       "[data-email-review-discard]",
+      "[data-communication-new]",
+      "[data-communication-refresh]",
+      "[data-communication-modal-close]",
+      "[data-communication-release]",
+      "[data-communication-cancel]",
+      "[data-communication-error]",
       "[data-routine-mark]",
       "[data-routine-execute]",
       "[data-temporary-routine-close]",
@@ -6411,6 +6600,25 @@ function handleDelegatedAppClick(event, appRoot) {
     updateEmailReviewStatus(dataset.emailReviewApprove, "pending");
   } else if (dataset.emailReviewDiscard !== undefined) {
     updateEmailReviewStatus(dataset.emailReviewDiscard, "cancelled");
+  } else if (dataset.communicationNew !== undefined) {
+    state.communicationModalOpen = true;
+    state.communicationMessage = "";
+    if (!state.communicationTemplateKey) state.communicationTemplateKey = emailTemplateRows[0]?.template_key || "";
+    renderPage();
+  } else if (dataset.communicationRefresh !== undefined) {
+    state.communicationMessage = "Atualizando fila de comunicação...";
+    renderPage();
+    loadSupabaseData();
+  } else if (dataset.communicationModalClose !== undefined) {
+    state.communicationModalOpen = false;
+    renderPage();
+  } else if (dataset.communicationRelease !== undefined) {
+    updateCommunicationEventStatus(dataset.communicationRelease, "pending");
+  } else if (dataset.communicationCancel !== undefined) {
+    updateCommunicationEventStatus(dataset.communicationCancel, "cancelled");
+  } else if (dataset.communicationError !== undefined) {
+    const event = emailReviewEvents.find((item) => item.id === dataset.communicationError);
+    window.alert(event?.last_error || "NÃO ENCONTRADO");
   } else if (dataset.temporaryRoutineClose !== undefined) {
     closeTemporaryRoutine(dataset.temporaryRoutineClose);
     renderPage();
@@ -6832,6 +7040,85 @@ function bind() {
       scheduleRenderWithFocus("#announcement-message");
     });
   }
+  const communicationQueueSearch = document.querySelector("#communication-queue-search");
+  if (communicationQueueSearch) {
+    communicationQueueSearch.addEventListener("input", (event) => {
+      state.communicationQueueQuery = event.target.value;
+      scheduleRenderWithFocus("#communication-queue-search");
+    });
+  }
+  const communicationTemplateSearch = document.querySelector("#communication-template-search");
+  if (communicationTemplateSearch) {
+    communicationTemplateSearch.addEventListener("input", (event) => {
+      state.communicationTemplateQuery = event.target.value;
+      scheduleRenderWithFocus("#communication-template-search");
+    });
+  }
+  const communicationForm = document.querySelector("#communication-form");
+  if (communicationForm) {
+    communicationForm.addEventListener("submit", handleCommunicationSubmit);
+  }
+  const communicationTemplateQuery = document.querySelector("#communication-template-query");
+  if (communicationTemplateQuery) {
+    communicationTemplateQuery.addEventListener("input", (event) => {
+      state.communicationTemplateQuery = event.target.value;
+      scheduleRenderWithFocus("#communication-template-query");
+    });
+  }
+  const communicationRecipientQuery = document.querySelector("#communication-recipient-query");
+  if (communicationRecipientQuery) {
+    communicationRecipientQuery.addEventListener("input", (event) => {
+      state.communicationRecipientQuery = event.target.value;
+      state.communicationEmployeeId = "";
+      scheduleRenderWithFocus("#communication-recipient-query");
+    });
+  }
+  const communicationTemplateSelect = document.querySelector("#communication-template-select");
+  if (communicationTemplateSelect) {
+    communicationTemplateSelect.addEventListener("change", (event) => {
+      state.communicationTemplateKey = event.target.value;
+      renderPage();
+    });
+  }
+  const communicationEmployeeSelect = document.querySelector("#communication-employee-select");
+  if (communicationEmployeeSelect) {
+    communicationEmployeeSelect.addEventListener("change", (event) => {
+      state.communicationEmployeeId = event.target.value;
+      renderPage();
+    });
+  }
+  const communicationRecurrence = document.querySelector("#communication-recurrence");
+  if (communicationRecurrence) {
+    communicationRecurrence.addEventListener("change", (event) => {
+      state.communicationRecurrence = event.target.value;
+      renderPage();
+    });
+  }
+  const communicationScheduleEnabled = document.querySelector("#communication-schedule-enabled");
+  if (communicationScheduleEnabled) {
+    communicationScheduleEnabled.addEventListener("change", (event) => {
+      state.communicationScheduleEnabled = event.target.checked;
+      renderPage();
+    });
+  }
+  const communicationScheduledAt = document.querySelector("#communication-scheduled-at");
+  if (communicationScheduledAt) {
+    communicationScheduledAt.addEventListener("input", (event) => {
+      state.communicationScheduledAt = event.target.value;
+    });
+  }
+  const communicationDeadline = document.querySelector("#communication-deadline");
+  if (communicationDeadline) {
+    communicationDeadline.addEventListener("input", (event) => {
+      state.communicationDeadline = event.target.value;
+    });
+  }
+  const communicationNote = document.querySelector("#communication-note");
+  if (communicationNote) {
+    communicationNote.addEventListener("input", (event) => {
+      state.communicationNote = event.target.value;
+    });
+  }
   const pointAdjustment = document.querySelector("#point-adjustment-form");
   if (pointAdjustment) {
     pointAdjustment.addEventListener("submit", handlePointAdjustmentSubmit);
@@ -6970,6 +7257,122 @@ async function handleAnnouncementSubmit(event) {
   state.announcementResult = `Comunicado enfileirado para ${employee.name}. Evento ${result.id} com status ${result.status}.`;
   state.announcementSubject = "";
   state.announcementMessage = "";
+  renderPage();
+}
+
+async function handleCommunicationSubmit(event) {
+  event.preventDefault();
+  if (!canSendAnnouncements()) {
+    state.communicationMessage = "Seu perfil não tem permissão para enviar comunicados.";
+    renderPage();
+    return;
+  }
+  if (!supabaseClient) {
+    state.communicationMessage = "Supabase indisponível para criar comunicado.";
+    renderPage();
+    return;
+  }
+  const employee = selectedCommunicationEmployee();
+  const template = selectedCommunicationTemplate();
+  if (!template) {
+    state.communicationMessage = "Selecione um template antes de enviar.";
+    renderPage();
+    return;
+  }
+  if (!employee) {
+    state.communicationMessage = "Selecione um colaborador antes de enviar.";
+    renderPage();
+    return;
+  }
+  if (!employee.email) {
+    state.communicationMessage = `${employee.name} não tem e-mail cadastrado.`;
+    renderPage();
+    return;
+  }
+
+  const scheduledFor = state.communicationScheduleEnabled && state.communicationScheduledAt
+    ? new Date(state.communicationScheduledAt).toISOString()
+    : new Date().toISOString();
+  const payload = {
+    colaborador_nome: employee.name,
+    employee_name: employee.name,
+    empresa: employee.company || "",
+    departamento: employee.department || "",
+    cargo: employee.role || "",
+    prazo: state.communicationDeadline.trim(),
+    observacao: state.communicationNote.trim(),
+    complemento: state.communicationNote.trim(),
+    recorrencia: state.communicationRecurrence,
+    link: window.location.origin,
+    remetente_nome: currentUser.name,
+  };
+  const eventRow = {
+    app_name: "recursos_humanos",
+    module_name: template.module_name || "comunicacao",
+    event_type: "comunicado_avulso",
+    employee_id: employee.dbId || employee.id,
+    employee_name: employee.name,
+    recipient_email: employee.email,
+    recipient_name: employee.name,
+    recipient_type: template.recipient_type || "colaborador",
+    subject: renderEmailTemplateValue(template.subject_template || template.template_key, payload),
+    template_key: template.template_key,
+    payload,
+    status: "pending",
+    scheduled_for: scheduledFor,
+    created_by: state.authProfile?.id || currentUser.authUserId || currentUser.name,
+  };
+  const { data, error } = await supabaseClient.from("email_events").insert(eventRow).select("id,status").single();
+  if (error) {
+    state.communicationMessage = `Não foi possível enfileirar o comunicado: ${error.message}`;
+    renderPage();
+    return;
+  }
+
+  if (state.communicationRecurrence !== "unico" || state.communicationScheduleEnabled) {
+    const nextDate = scheduledFor.slice(0, 10);
+    const { error: scheduleError } = await supabaseClient.from("hr_scheduled_communications").insert({
+      template_key: template.template_key,
+      employee_id: employee.dbId || null,
+      recorrencia: state.communicationRecurrence,
+      proximo_envio: nextDate,
+      payload,
+      ativo: true,
+      created_by: state.authProfile?.id || null,
+    });
+    if (scheduleError) {
+      state.communicationMessage = `Evento criado (${data.id}), mas o agendamento não foi salvo: ${scheduleError.message}`;
+      renderPage();
+      return;
+    }
+  }
+
+  state.communicationMessage = `Comunicado enfileirado para ${employee.name}. Evento ${data.id} com status ${data.status}.`;
+  state.communicationModalOpen = false;
+  state.communicationRecipientQuery = "";
+  state.communicationEmployeeId = "";
+  state.communicationDeadline = "";
+  state.communicationNote = "";
+  await loadSupabaseData();
+}
+
+async function updateCommunicationEventStatus(eventId, status) {
+  if (!supabaseClient) {
+    state.communicationMessage = "Supabase indisponível para atualizar a fila.";
+    renderPage();
+    return;
+  }
+  const event = emailReviewEvents.find((item) => item.id === eventId);
+  const { error } = await supabaseClient.from("email_events").update({ status }).eq("id", eventId);
+  if (error) {
+    state.communicationMessage = `Não foi possível atualizar o evento: ${error.message}`;
+    renderPage();
+    return;
+  }
+  emailReviewEvents = emailReviewEvents.map((item) => (item.id === eventId ? { ...item, status } : item));
+  state.communicationMessage = `Evento ${status === "pending" ? "liberado" : "cancelado"}${event?.recipient_name ? ` para ${event.recipient_name}` : ""}.`;
+  updateRuntimeDataSignature();
+  saveRuntimeDataCache();
   renderPage();
 }
 
