@@ -1,0 +1,39 @@
+{
+  "rootFolder": {
+    "webViewLink": "https://drive.google.com/drive/folders/16nBymzaP5BdxQkRWWLNtFJYdng5-S_qC",
+    "id": "16nBymzaP5BdxQkRWWLNtFJYdng5-S_qC",
+    "name": "RH Prodelar"
+  },
+  "logosFolder": {
+    "webViewLink": "https://drive.google.com/drive/folders/1GsQ0te5KaVveneQu5EsGUlHEWABle1Br",
+    "id": "1GsQ0te5KaVveneQu5EsGUlHEWABle1Br",
+    "name": "Logos"
+  },
+  "uploaded": {
+    "prodelar": {
+      "key": "prodelar",
+      "id": "1N2EhQSZF07LmWjiFFA56NYi-4hkT1AGI",
+      "fileName": "Logomarca_Prodelar__att_.jpg",
+      "webViewLink": "https://drive.google.com/file/d/1N2EhQSZF07LmWjiFFA56NYi-4hkT1AGI/view?usp=drivesdk",
+      "publicUrl": "https://drive.google.com/uc?export=view&id=1N2EhQSZF07LmWjiFFA56NYi-4hkT1AGI"
+    },
+    "colmob": {
+      "key": "colmob",
+      "id": "18tov781qj6lx3gs4fEEWuEyhSCFFlcVY",
+      "fileName": "Logo_Colmob__att_.jpg",
+      "webViewLink": "https://drive.google.com/file/d/18tov781qj6lx3gs4fEEWuEyhSCFFlcVY/view?usp=drivesdk",
+      "publicUrl": "https://drive.google.com/uc?export=view&id=18tov781qj6lx3gs4fEEWuEyhSCFFlcVY"
+    },
+    "servimec": {
+      "key": "servimec",
+      "id": "1bz7LMZN02oe7oNxSRi1lD6YU0snCW86r",
+      "fileName": "Logomarca_Servimec__att_.jpg",
+      "webViewLink": "https://drive.google.com/file/d/1bz7LMZN02oe7oNxSRi1lD6YU0snCW86r/view?usp=drivesdk",
+      "publicUrl": "https://drive.google.com/uc?export=view&id=1bz7LMZN02oe7oNxSRi1lD6YU0snCW86r"
+    }
+  },
+  "templatesTotal": 63,
+  "htmlCount": 63,
+  "groupCount": 5,
+  "singleCount": 58
+}
