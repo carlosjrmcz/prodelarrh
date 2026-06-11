@@ -1218,6 +1218,18 @@ function getEffectiveRoleCode() {
   return window._impersonatedEmployee?.roleCode || state.authProfile?.role_code || currentUser.role || currentUser.profile || "";
 }
 
+function inferredRoleCodeForImpersonation(employee, roleCode) {
+  if (roleCode && roleCode !== "colaborador") return roleCode;
+  const name = normalizeText(employee?.full_name || "");
+  const role = normalizeText(employee?.position_name || "");
+  const hasDirectReports = (window._impersonationEmployees || []).some((item) => isLeaderNameMatch(item.manager_name, employee?.full_name));
+  if (name.includes("CARLOS ALBERTO PIMENTEL")) return "diretor";
+  if (name.includes("ANA PAULA MAIA PAIVA")) return "gestor_rh";
+  if (name.includes("RUBENON") || role.includes("FINANCEIR")) return "gestor_financeiro";
+  if (hasDirectReports) return "gestor";
+  return "colaborador";
+}
+
 async function renderImpersonationBar(user = currentUser) {
   if (!isImpersonationAdmin(user) || !supabaseClient) {
     removeImpersonationBar();
@@ -1312,7 +1324,7 @@ async function applyImpersonation(employeeId) {
     .eq("employee_id", employeeId)
     .maybeSingle();
 
-  const roleCode = profile?.role_code || window._impersonationRoles?.get(employeeId) || "colaborador";
+  const roleCode = inferredRoleCodeForImpersonation(employee, profile?.role_code || window._impersonationRoles?.get(employeeId) || "colaborador");
   const appProfile = appProfileFromRoleCode(roleCode);
   impersonating = {
     employeeId: employee.id,
@@ -1340,6 +1352,9 @@ async function applyImpersonation(employeeId) {
   state.simulatedPerson = currentUser.name;
   state.company = currentUser.company || "Todas";
   state.requestCompany = currentUser.company || "Todas";
+  state.pointScope = appProfile === "Colaborador" ? "self" : "team";
+  state.vacationScope = appProfile === "Colaborador" ? "self" : "team";
+  state.paystubScope = appProfile === "Colaborador" ? "self" : "team";
   renderMemo = {};
   await renderImpersonationBar({ email: "carlosjrmcz@gmail.com" });
   renderPage();
