@@ -1,60 +1,81 @@
 {
-  "root": "1yjQUYtSak5M9U5vuJxDcVLY6iy6zw_q6",
+  "root": "16nBymzaP5BdxQkRWWLNtFJYdng5-S_qC",
+  "general": {
+    "colaboradores": "1KjfKcpzZ6b3cIQjjSScuY4WjZD1fILYA",
+    "importacoes": "1QVoxdJ_W2tn0IR3icxU6X5ZXN5J22k1R",
+    "pacote_mensal": "1QVNDDNOXq0EtfXHo7kgMHIV28715R7vs",
+    "rotinas": "1Eb-WmIvzEAuG8wLCS7l5yYArFfdQbKDO",
+    "comunicados": "19oymryQxdkn_I4p_GMCPrnOray5_WVLo",
+    "logos": "1GsQ0te5KaVveneQu5EsGUlHEWABle1Br",
+    "inbox": "1pBRziWfziP9ZMMQopEgIpVowlDUjMKM3"
+  },
+  "imports": {
+    "fichas_funcionais": "108bpKwROoWmmxocvjDA0boq6fkHG_-VB",
+    "previsao_ferias": "1GrQiIQLa2WX7gDUzhuyu4UnbzlqCs212",
+    "contracheques": "198BM2y1bH2s880dgQeJZt5knKjhV34I1",
+    "folha_bruta": "1dr--ZrHmfeC9LkA_yg1iPuS20jo2F7ZV"
+  },
+  "monthly_packages": {
+    "2026-06": "1BbuV6ccaPXuoq81YPLQPLjwUOQQ4_QZ6"
+  },
   "companies": {
-    "PRODELAR": "1UROfZYC6debeOP4-1kyizdGZDhuUlx-J",
-    "COLMOB": "1OrCQCn_rwF_ntDdwDqtWejja-NcV_1xF",
-    "SERVIMEC": "17IpkleAJPhjZ6LIKwtw-gxPuttW1Q61-"
+    "PRODELAR": "1MzPW08aLyMMTg6t4ZOK1K4QS9fS5wYeS",
+    "COLMOB": "1xxUs8mSbqt51gN896Nph6h_Lm9QZ4eVq",
+    "SERVIMEC": "1SFRa0C7c4SvpQYg4a8sG2Gw4ApIELuXE"
   },
   "inbox": {
-    "solicitacoes": "1XqmXiLWKfw4Em7MG7vjjC_kNDy0yR8dC",
-    "contracheques_entrada": "1M0MBesLWFJIB6vlHIsACyeBIaNigt2aj",
-    "ponto_entrada": "1zpfVYuTIR0DNBwyxHvyEY0Je8TD29CHw",
-    "atestados_entrada": "115KT5UN33jfeOzj5SjCTlKJCTF3Hngox",
-    "admissao_entrada": "1pEEatjOEzTiPm2MzxJYsI-Ppl9YOOowi",
-    "ferias_entrada": "1jIqN2M0M0qKhdAKTvp71bcEHOUDJ8o3F"
+    "solicitacoes": "1GYah6aFk7epWRv2xy8zeluD_xbozfC39",
+    "contracheques_entrada": "1w4PC5Q9ONWaV_5N4nJptsGvNQu8iTsBV",
+    "ponto_entrada": "13TaaSKp3IDVTgQRaJcH62p9tVtJoZdix",
+    "atestados_entrada": "1MDW_RPjlNXB_ve8zX0F3-RLKi0ndZeRO",
+    "admissao_entrada": "1bjajiJ8YkhUbHnPI5IHz5trQn9dAbQFb",
+    "ferias_entrada": "19nQYYGtFlxJA5k5sC6m-G_pwRzxwoCiX"
   },
   "modules": {
     "PRODELAR": {
-      "00_ENTRADA": "1815dmK7-65Z6RQb7xVNyzle1isr9aJpg",
-      "01_COLABORADORES": "1GV_3dG0YHg5mcu3A3QJLIrR_abA_zX0r",
-      "02_ADMISSAO": "1j1WZhDfSGXL8UA2_pjfvc6kBEAS_WJEP",
-      "03_CONTRATOS_E_TERMOS": "1q6X80x15Zo-H9VnnmPiwgFYQh703pczu",
-      "04_FOLHA_E_CONTRACHEQUES": "1rfNhUVIX0j7_bmlnyei2AvOVZMUUoFsJ",
-      "05_PONTO_E_BANCO_DE_HORAS": "1SluU1-WMoKQcF2FhSV5u5NEDdrynhjOV",
-      "06_FERIAS": "15OfJ3ss0NFo12M5UruquHHxhuWhrdH6l",
-      "07_ATESTADOS_E_AFASTAMENTOS": "1UfwZqbkGCnyZCI-5pAuDmjgkc7wHXB_q",
-      "08_BENEFICIOS": "12i2-emaK3jOwT6MAQkTQFFpb7B_FyrZs",
-      "09_DESLIGAMENTO": "1BkeXZ0Q8gBk3hUH1xG3HJ5okplAGjegx",
-      "10_POLITICAS": "1oLqrZusindO8k9bDai5L7r82eew3hAUU",
-      "99_AUDITORIA_E_PROCESSADOS": "1aTHhEQukz3eVbVpuULyPloylfJ1cP1s2"
+      "COLABORADORES_GERAL": "1nFKFViO8mpuPCbpmsxCiL8dErBriD9BZ",
+      "00_ENTRADA": "1fAiNXo68a3LBT59WprRz6iVhKfyJ8qpI",
+      "01_COLABORADORES": "1dL5OjmJxnT6W6fvS_MUXvV72cYzH2Su9",
+      "02_ADMISSAO": "1TWTy8C30BksabK4yQhWrHi7fNINQ4blk",
+      "03_CONTRATOS_E_TERMOS": "1tGiUkjYmxFdGULz2WfRtZnuIw1TDybY0",
+      "04_FOLHA_E_CONTRACHEQUES": "1VgoWNliklox50uxy0vMaD67QZQQ3kMtz",
+      "05_PONTO_E_BANCO_DE_HORAS": "1GJ6xZF2d5kVCH0YYCaoADpEE5Ld01St-",
+      "06_FERIAS": "1zaeiwtnO8vIqlb1mSGVwt78Q3hLzqjGg",
+      "07_ATESTADOS_E_AFASTAMENTOS": "1D9Z9ABrQABW5DHlSDGMtFiJcdrErL2h9",
+      "08_BENEFICIOS": "1FDblrBHPN9jPcq4eDIm_iLi4nKwzo4V_",
+      "09_DESLIGAMENTO": "1dCKM7gUR-6RlR6GTOEDsw7tGzc5VLXlY",
+      "10_POLITICAS": "11uK9h8A1A2N83wK-LyecIEjgpdUCHmVQ",
+      "99_AUDITORIA_E_PROCESSADOS": "11rJFsDp8-HeM87WvhqRpziB_PyAVTJLD"
     },
     "COLMOB": {
-      "00_ENTRADA": "18OjbMvwD7k6JMN1w4lJFIjWuQmOpLfrg",
-      "01_COLABORADORES": "117vZk-5_V1WRLJ89j-Km5Q5Jqt3-GIL7",
-      "02_ADMISSAO": "1bSH-GNMkQkXZz-mElYOgPU19MWBN0wr4",
-      "03_CONTRATOS_E_TERMOS": "1nbiXg8WSSX8oZR7UBboP7tfBR1Gvcjjb",
-      "04_FOLHA_E_CONTRACHEQUES": "1ej608-xJcpLrSDacd3Uq9rSbqLnJ-DF-",
-      "05_PONTO_E_BANCO_DE_HORAS": "1jtwV4QXVTWqZELRd-THwykIGsWalIWne",
-      "06_FERIAS": "1P-wqAT2EBw35kYNbuPjBJcN9g-q9TTKa",
-      "07_ATESTADOS_E_AFASTAMENTOS": "1_Bd0xrRhzWXF_NIOKJOAPv5RjUzOHrxA",
-      "08_BENEFICIOS": "1YM9OaPExJVWnGMFWjRjss4yB5ul256Ua",
-      "09_DESLIGAMENTO": "1Z8TA-meWmhAX2YmTLJzgN-gmDTJzByt7",
-      "10_POLITICAS": "1HDpjXMvXTRtQtoc7JfRqTJZYZrKYqcRu",
-      "99_AUDITORIA_E_PROCESSADOS": "1t0TRhv8QJuDbG00nfwYTw6hCGwZsx9aJ"
+      "COLABORADORES_GERAL": "1Y3T3Bey7aviLIiyrTABZbFifAKELh6WH",
+      "00_ENTRADA": "1yQstwKCK78ZgeKoTZEHeHxVp0knCatzL",
+      "01_COLABORADORES": "1FdtO1m2gzklvQWmfx5h2t8tl9TVRyKH_",
+      "02_ADMISSAO": "1i-1o-2IYMtMwa4izJf5V8Cv-YaLQjK25",
+      "03_CONTRATOS_E_TERMOS": "1CWUDFke6w-VZvXaquTO_3vhslF33XzCT",
+      "04_FOLHA_E_CONTRACHEQUES": "11kQZhQu3BkJUjnrAWjIJ80h1CFk8ekMV",
+      "05_PONTO_E_BANCO_DE_HORAS": "1Eel6RC95r06DqwFK3GxQJ2emKXRTFNl5",
+      "06_FERIAS": "1vBEIunEPKA24xlplTuO011YR4R94CTfR",
+      "07_ATESTADOS_E_AFASTAMENTOS": "14eDZb1KojWTWgvPtVkLjZvYdswM9wuS1",
+      "08_BENEFICIOS": "1Wbg9kv2fnL1RNDkGBL0_3ej60jFAM9ld",
+      "09_DESLIGAMENTO": "19f3zgl4xEDq2Gb3Ev4j_R2374dpUByYg",
+      "10_POLITICAS": "1OkdFLs7pLOxKYjTBqvHHBDUB-6ILPDIY",
+      "99_AUDITORIA_E_PROCESSADOS": "1mgrolALrFWKU-XFdoKHznenHD9ksf__g"
     },
     "SERVIMEC": {
-      "00_ENTRADA": "1Hs68Ne85FkTgP7KHxLkJw-FDBPDlooU3",
-      "01_COLABORADORES": "1T-21zWZoj5RQeRI3iLh1uzr-7_osrX2Q",
-      "02_ADMISSAO": "19tClb9hK5pQR5inekKeS0uJ1oOGW3JtA",
-      "03_CONTRATOS_E_TERMOS": "1QyoPR3B9kw3IxskQ75Lfs3le5kZQeknd",
-      "04_FOLHA_E_CONTRACHEQUES": "1wbsn1XM6jv42d0NGxrI6PM64prlqgWJ2",
-      "05_PONTO_E_BANCO_DE_HORAS": "1UBnm5EXeduLVeqwO57WwrnLl0_qTlDV6",
-      "06_FERIAS": "1r-LpTMak-uQBA22iEukw_vDjpfD1twMP",
-      "07_ATESTADOS_E_AFASTAMENTOS": "1s1eW3Trs2lKtFWVMH2tEgjg7TYagprIZ",
-      "08_BENEFICIOS": "18paIeyN47fr2d1MlltQVDLohbU9Mf3oo",
-      "09_DESLIGAMENTO": "1SDPlna0M4Uz4k7lAdwx-ZKMqTSh2sME7",
-      "10_POLITICAS": "1hovGDTl97OOvbVOQXQcqJLUxJH4Xtb04",
-      "99_AUDITORIA_E_PROCESSADOS": "1u9ip-nJuK4UcI8HWhHLE11P_-vgPalY9"
+      "COLABORADORES_GERAL": "1ytlr0jz2mEQeg0x5yYLbVuoErNNW50b7",
+      "00_ENTRADA": "1JxUCqCbxIkVsCWfQbEmzx4YqxCiKWEv2",
+      "01_COLABORADORES": "1sReutg_PIEeGkh813g7H2CWNc-jGlEGn",
+      "02_ADMISSAO": "1AdXVLfgghDoHmZYztTI-raiUr24cGg_1",
+      "03_CONTRATOS_E_TERMOS": "10eTUwyCAJQvnzhLlvnc6Vd4Jf_JdSQap",
+      "04_FOLHA_E_CONTRACHEQUES": "1NiDN9hOb-PnLj6S7PdhKphueKZjNfcp9",
+      "05_PONTO_E_BANCO_DE_HORAS": "18aiqLkaTttCZiZvn0imcFBGLEHKdCdTm",
+      "06_FERIAS": "1DT-h4kXU7uHpvMqrPujVMrQHs5InV191",
+      "07_ATESTADOS_E_AFASTAMENTOS": "1THO1X4ndTieqrmXF-mrtp2-9nAzcOozK",
+      "08_BENEFICIOS": "1lfIExIZ6-75u3-GpYeaO0y7n2jgaLsCu",
+      "09_DESLIGAMENTO": "1yFTtpXVARDapeijhLt3Q6akiWWCBbamN",
+      "10_POLITICAS": "1lM6NXgPDe2mN9GcUzKUw1aN1QFL5Vemu",
+      "99_AUDITORIA_E_PROCESSADOS": "12Fbo1ufCmOr41SQkhj_3NoBuw45LdMId"
     }
   }
 }

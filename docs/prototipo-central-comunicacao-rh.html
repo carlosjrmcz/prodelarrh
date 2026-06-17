@@ -1,0 +1,1086 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Protótipo - Central de Comunicação RH</title>
+  <style>
+    :root {
+      --bg: #f3f7f9;
+      --card: #ffffff;
+      --line: #d5e0e8;
+      --text: #172333;
+      --muted: #5d6f89;
+      --green: #1f7a6e;
+      --green-dark: #145f54;
+      --green-soft: #e6f4ef;
+      --orange: #e87722;
+      --blue-soft: #e6f1fb;
+      --yellow-soft: #fff2d9;
+      --red-soft: #fdeaea;
+      --shadow: 0 12px 30px rgba(17, 38, 58, 0.08);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+
+    .shell {
+      display: grid;
+      grid-template-columns: 248px minmax(0, 1fr);
+      min-height: 100vh;
+    }
+
+    aside {
+      background: #0d3037;
+      color: #fff;
+      padding: 18px 14px;
+    }
+
+    .brand-box {
+      background: #fff;
+      border-radius: 8px;
+      padding: 14px;
+      width: 184px;
+      margin-bottom: 18px;
+    }
+
+    .brand-box img {
+      display: block;
+      width: 100%;
+      height: auto;
+    }
+
+    .brand-title {
+      font-size: 20px;
+      font-weight: 800;
+      line-height: 1.1;
+      margin: 0;
+    }
+
+    .brand-subtitle {
+      color: #c7d5dc;
+      font-size: 13px;
+      margin: 4px 0 28px;
+    }
+
+    .nav-title {
+      color: #9ab1ba;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+      margin: 22px 8px 10px;
+    }
+
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 11px 12px;
+      border-radius: 7px;
+      color: #eef7f8;
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+
+    .nav-item.active { background: rgba(255,255,255,.15); }
+
+    main {
+      min-width: 0;
+      padding: 0 28px 40px;
+    }
+
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      gap: 20px;
+      align-items: center;
+      padding: 28px 0 22px;
+      border-bottom: 1px solid var(--line);
+      margin-bottom: 22px;
+    }
+
+    h1, h2, h3, p { margin: 0; }
+
+    h1 { font-size: 25px; }
+    h2 { font-size: 20px; }
+    h3 { font-size: 17px; }
+
+    .subtitle {
+      color: var(--muted);
+      margin-top: 5px;
+      font-size: 14px;
+    }
+
+    .user-card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px 16px;
+      min-width: 250px;
+      text-transform: uppercase;
+      font-size: 12px;
+      color: var(--muted);
+      box-shadow: 0 8px 22px rgba(17, 38, 58, 0.04);
+    }
+
+    .user-card strong {
+      display: block;
+      color: var(--text);
+      font-size: 14px;
+      margin-top: 3px;
+    }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+    }
+
+    .pad { padding: 18px; }
+
+    .status-grid {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+
+    .status-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      min-height: 78px;
+    }
+
+    .status-card small {
+      display: block;
+      color: var(--muted);
+      font-weight: 800;
+      margin-bottom: 8px;
+    }
+
+    .status-card strong {
+      font-size: 26px;
+    }
+
+    .review { background: var(--yellow-soft); }
+    .scheduled { background: var(--blue-soft); }
+    .processing { background: #ffe6d2; }
+    .sent { background: #e9f5dd; }
+    .failed { background: var(--red-soft); }
+
+    .section-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 18px;
+      margin-bottom: 16px;
+    }
+
+    .button-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+
+    button {
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--text);
+      border-radius: 7px;
+      font: inherit;
+      font-weight: 750;
+      padding: 10px 13px;
+      cursor: pointer;
+    }
+
+    button:hover { border-color: #9ab4c2; }
+
+    button.primary,
+    button.active {
+      background: var(--green);
+      border-color: var(--green);
+      color: #fff;
+    }
+
+    button.ghost {
+      color: var(--green-dark);
+      background: #f9fdfb;
+    }
+
+    .start-panel {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 16px;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+
+    .template-panel { margin-bottom: 16px; }
+
+    .search-line {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 18px;
+      margin-bottom: 12px;
+    }
+
+    .field {
+      display: grid;
+      gap: 6px;
+    }
+
+    .field span {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: .02em;
+    }
+
+    input,
+    textarea,
+    select {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 11px 12px;
+      font: inherit;
+      background: #fff;
+      color: var(--text);
+    }
+
+    textarea { resize: vertical; min-height: 96px; }
+
+    .search-left {
+      width: min(460px, 100%);
+    }
+
+    .template-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .template-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 16px;
+      align-items: center;
+      padding: 13px 14px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+    }
+
+    .template-row strong {
+      display: block;
+      font-size: 16px;
+      margin-bottom: 4px;
+    }
+
+    .template-row p {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.35;
+    }
+
+    .tags {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      margin-top: 8px;
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      min-height: 22px;
+      border-radius: 999px;
+      background: #e4f3f7;
+      color: #1d5f6f;
+      padding: 3px 9px;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .queue-panel { margin-bottom: 16px; }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+
+    th,
+    td {
+      border-top: 1px solid var(--line);
+      text-align: left;
+      padding: 12px 14px;
+      vertical-align: middle;
+    }
+
+    th {
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: .02em;
+      background: #f8fbfc;
+    }
+
+    .hidden { display: none !important; }
+
+    .compose {
+      display: grid;
+      grid-template-columns: minmax(420px, 0.9fr) minmax(420px, 1.1fr);
+      gap: 16px;
+      align-items: start;
+    }
+
+    .steps {
+      display: grid;
+      gap: 12px;
+    }
+
+    .step {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 14px;
+    }
+
+    .step-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 10px;
+    }
+
+    .step-title small {
+      color: var(--muted);
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+
+    .choice-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .substep-label {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 900;
+      letter-spacing: .03em;
+      margin: 10px 0 7px;
+      text-transform: uppercase;
+    }
+
+    .choice {
+      min-height: 66px;
+      text-align: left;
+      background: #fff;
+    }
+
+    .choice.active {
+      background: var(--green-soft);
+      color: var(--text);
+      border-color: var(--green);
+      box-shadow: inset 4px 0 0 var(--green);
+    }
+
+    .choice strong,
+    .choice span {
+      display: block;
+    }
+
+    .choice span {
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 3px;
+      line-height: 1.25;
+    }
+
+    .revealed {
+      display: grid;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .results {
+      display: grid;
+      gap: 7px;
+      max-height: 230px;
+      overflow: auto;
+    }
+
+    .result {
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 10px 12px;
+      background: #fff;
+      cursor: pointer;
+    }
+
+    .result strong {
+      display: block;
+      margin-bottom: 2px;
+    }
+
+    .result small {
+      color: var(--muted);
+      font-weight: 700;
+    }
+
+    .selected-summary {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      border: 1px solid #b8dbd0;
+      background: var(--green-soft);
+      border-radius: 7px;
+      padding: 10px 12px;
+    }
+
+    .selected-summary strong {
+      display: block;
+      color: var(--green-dark);
+    }
+
+    .preview-card {
+      position: sticky;
+      top: 18px;
+      overflow: hidden;
+    }
+
+    .preview-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 15px 16px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .preview-box {
+      background: #edf1f2;
+      padding: 18px;
+    }
+
+    .email-frame {
+      background: #fff;
+      max-width: 620px;
+      margin: 0 auto;
+      border-radius: 4px;
+      overflow: hidden;
+      box-shadow: 0 12px 26px rgba(0,0,0,.08);
+    }
+
+    .mail-head {
+      background: #1a5c3a;
+      color: #fff;
+      padding: 18px 22px 20px;
+      border-bottom: 4px solid var(--orange);
+    }
+
+    .mail-logo {
+      display: inline-flex;
+      align-items: center;
+      background: #fff;
+      color: #1a5c3a;
+      border-radius: 6px;
+      min-width: 118px;
+      height: 38px;
+      padding: 0 14px;
+      font-weight: 900;
+      margin-bottom: 12px;
+    }
+
+    .mail-body {
+      padding: 22px;
+    }
+
+    .mail-body h2 {
+      color: #1a5c3a;
+      margin: 12px 0 14px;
+    }
+
+    .mail-row {
+      display: grid;
+      grid-template-columns: 180px minmax(0, 1fr);
+      gap: 12px;
+      padding: 9px 0;
+      border-bottom: 1px solid #e6ecef;
+      font-size: 14px;
+    }
+
+    .mail-row span { color: #687887; }
+    .mail-row strong { color: #172333; }
+
+    .app-card {
+      margin-top: 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 14px;
+    }
+
+    .actions-final {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      margin-top: 14px;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    @media (max-width: 1100px) {
+      .shell { grid-template-columns: 1fr; }
+      aside { display: none; }
+      main { padding: 0 16px 28px; }
+      .status-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .compose { grid-template-columns: 1fr; }
+      .preview-card { position: static; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <aside>
+      <div class="brand-box"><img src="../assets/grupo-prodelar-logos.png" alt="Grupo Prodelar"></div>
+      <p class="brand-title">Recursos Humanos</p>
+      <p class="brand-subtitle">Prodelar · Colmob · Servimec</p>
+      <div class="nav-title">Central</div>
+      <div class="nav-item">Meu portal</div>
+      <div class="nav-item">Dashboard RH</div>
+      <div class="nav-item">Solicitações</div>
+      <div class="nav-title">Bases, cadastros e rotinas</div>
+      <div class="nav-item">Controles RH</div>
+      <div class="nav-item">Rotinas / Importações RH</div>
+      <div class="nav-item">Pacote mensal</div>
+      <div class="nav-item active">Comunicação RH</div>
+      <div class="nav-item">Aprovar e-mails</div>
+    </aside>
+
+    <main>
+      <header class="topbar">
+        <div>
+          <h1>Central de Comunicação RH</h1>
+          <p class="subtitle">E-mails, comunicados no app, agendamentos e prévia final em uma única tela.</p>
+        </div>
+        <div class="user-card">
+          Usuário
+          <strong>Fernanda Patricia Rocha Cavalcante</strong>
+          RH
+        </div>
+      </header>
+
+      <section id="home-screen">
+        <div class="section-header">
+          <div>
+            <h2>Central de Comunicação RH</h2>
+            <p class="subtitle">Controle de fila, modelos, revisão, agendamentos e comunicados avulsos.</p>
+          </div>
+          <button>Atualizar</button>
+        </div>
+
+        <div class="status-grid">
+          <div class="status-card review"><small>Aguardando revisão</small><strong>0</strong></div>
+          <div class="status-card scheduled"><small>Agendados</small><strong>0</strong></div>
+          <div class="status-card processing"><small>Processando</small><strong>0</strong></div>
+          <div class="status-card sent"><small>Enviados</small><strong>17</strong></div>
+          <div class="status-card failed"><small>Falhas</small><strong>0</strong></div>
+        </div>
+
+        <div class="card pad start-panel">
+          <div>
+            <h2>Nova comunicação</h2>
+            <p class="subtitle">Inicie pelo canal. Depois o sistema abre apenas as perguntas necessárias.</p>
+          </div>
+          <div class="button-row">
+            <button class="primary" data-start="both">Nova comunicação</button>
+          </div>
+        </div>
+
+        <div class="card pad template-panel">
+          <div class="search-line">
+            <div>
+              <h2>Templates disponíveis</h2>
+              <p class="subtitle">Modelos com nomes usuais. Use o localizar para achar por tema, assunto ou corpo.</p>
+            </div>
+            <label class="field search-left">
+              <span>Localizar</span>
+              <input id="template-gallery-search" placeholder="Férias, ponto, admissão, ASO, aniversário..." />
+            </label>
+          </div>
+          <div id="template-gallery" class="template-list"></div>
+        </div>
+
+        <div class="card queue-panel">
+          <div class="section-header pad" style="margin-bottom:0">
+            <div>
+              <h2>Fila em andamento</h2>
+              <p class="subtitle">Eventos pendentes, em revisão, processando ou com falha.</p>
+            </div>
+            <label class="field search-left">
+              <span>Localizar</span>
+              <input placeholder="Destinatário, template ou evento" />
+            </label>
+          </div>
+          <table>
+            <thead>
+              <tr><th>Status</th><th>Destinatário</th><th>Template</th><th>Agendado</th><th>Ações</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><span class="tag">Agendado</span></td>
+                <td>Carlos Teste<br><small>carlosjrmcz@gmail.com</small></td>
+                <td>Solicitação de férias recebida</td>
+                <td>Hoje, 14:00</td>
+                <td><button class="ghost">Ver</button></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="compose-screen" class="hidden">
+        <div class="section-header">
+          <div>
+            <h2>Nova comunicação</h2>
+            <p class="subtitle">Fluxo guiado: canal, público, template e versão final.</p>
+          </div>
+          <button id="back-home">Voltar à Central</button>
+        </div>
+
+        <div class="compose">
+          <form class="steps">
+            <div class="step">
+              <div class="step-title">
+                <h3>1. Canal</h3>
+                <small>como enviar</small>
+              </div>
+              <div class="button-row" id="channel-row">
+                <button type="button" class="active" data-channel="both">E-mail + App</button>
+                <button type="button" data-channel="email">Só e-mail</button>
+                <button type="button" data-channel="app">Só app</button>
+              </div>
+            </div>
+
+            <div class="step">
+              <div class="step-title">
+                <h3>2. Público</h3>
+                <small>quem recebe</small>
+              </div>
+              <div class="substep-label">Empresa</div>
+              <div class="choice-grid" id="company-row">
+                <button type="button" class="choice active" data-company="Prodelar"><strong>Prodelar</strong><span>Filtra toda a próxima etapa</span></button>
+                <button type="button" class="choice" data-company="Colmob"><strong>Colmob</strong><span>Setores e colaboradores da empresa</span></button>
+                <button type="button" class="choice" data-company="Servimec"><strong>Servimec</strong><span>Setores e colaboradores da empresa</span></button>
+                <button type="button" class="choice" data-company="all"><strong>Grupo todo</strong><span>Usar as três empresas</span></button>
+              </div>
+              <div class="substep-label">Escopo</div>
+              <div class="choice-grid" id="audience-row">
+                <button type="button" class="choice active" data-audience="employee"><strong>Colaborador</strong><span>Uma pessoa específica</span></button>
+                <button type="button" class="choice" data-audience="all"><strong>Todos</strong><span>Todos da empresa selecionada</span></button>
+                <button type="button" class="choice" data-audience="department"><strong>Setor</strong><span>Um setor da empresa</span></button>
+                <button type="button" class="choice" data-audience="role"><strong>Cargo</strong><span>Uma função/cargo</span></button>
+                <button type="button" class="choice" data-audience="profile"><strong>Perfil</strong><span>RH, diretor, gestor ou colaborador</span></button>
+              </div>
+              <div id="audience-fields" class="revealed"></div>
+            </div>
+
+            <div class="step">
+              <div class="step-title">
+                <h3>3. Template</h3>
+                <small>modelo do texto</small>
+              </div>
+              <div id="selected-template" class="selected-summary hidden"></div>
+              <label class="field" id="template-search-wrap">
+                <span>Localizar template</span>
+                <input id="template-search" placeholder="Digite férias, ponto, admissão..." />
+              </label>
+              <div id="template-results" class="results"></div>
+            </div>
+
+            <div class="step">
+              <div class="step-title">
+                <h3>4. Complementos</h3>
+                <small>opcional</small>
+              </div>
+              <div class="revealed">
+                <label class="field">
+                  <span>Prazo</span>
+                  <input id="deadline" placeholder="Ex.: até sexta-feira" />
+                </label>
+                <label class="field">
+                  <span>Observação</span>
+                  <textarea id="note" placeholder="Texto adicional, se precisar."></textarea>
+                </label>
+              </div>
+            </div>
+          </form>
+
+          <aside class="card preview-card">
+            <div class="preview-header">
+              <div>
+                <h2>Versão final</h2>
+                <p class="subtitle" id="delivery-summary">E-mail + App · colaborador individual</p>
+              </div>
+              <span class="tag" id="ready-tag">Aguardando dados</span>
+            </div>
+            <div class="preview-box">
+              <div class="email-frame">
+                <div class="mail-head">
+                  <div class="mail-logo" id="mail-logo">Prodelar</div>
+                  <p>Recursos Humanos · Grupo Prodelar</p>
+                </div>
+                <div class="mail-body">
+                  <span class="tag">Informativo</span>
+                  <h2 id="preview-title">Selecione um template</h2>
+                  <p id="preview-greeting">Escolha o público e o modelo para ver a mensagem final.</p>
+                  <div class="mail-row"><span>Destinatário</span><strong id="preview-recipient">Não selecionado</strong></div>
+                  <div class="mail-row"><span>Empresa</span><strong id="preview-company">Não selecionada</strong></div>
+                  <div class="mail-row"><span>Canal</span><strong id="preview-channel">E-mail + App</strong></div>
+                  <div class="mail-row"><span>Versões geradas</span><strong id="preview-versions">E-mail e app</strong></div>
+                </div>
+              </div>
+              <div class="app-card">
+                <strong>Versão no app</strong>
+                <p class="subtitle" id="app-preview">Será exibida quando o canal incluir App.</p>
+              </div>
+              <div class="actions-final">
+                Protótipo visual: nenhum envio real nesta tela.
+              </div>
+            </div>
+          </aside>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const templates = [
+      {
+        key: "ferias_aprovadas_colaborador",
+        name: "Férias aprovadas",
+        subject: "[RH] Férias aprovadas - Junho/2026",
+        description: "Confirma ao colaborador que o período de férias foi aprovado e mostra o acesso ao portal.",
+        topics: ["Férias", "Aprovação", "Colaborador"],
+      },
+      {
+        key: "solicitacao_alteracao_ferias",
+        name: "Solicitação de alteração de férias",
+        subject: "[RH] Solicitação de alteração de férias",
+        description: "Usado quando o RH ou gestor precisa pedir ajuste nas datas de férias programadas.",
+        topics: ["Férias", "Alteração", "Gestor"],
+      },
+      {
+        key: "pendencia_ponto_colaborador",
+        name: "Pendência de ponto",
+        subject: "[RH] Ajuste de ponto necessário",
+        description: "Solicita correção de marcação, ausência, atraso ou justificativa de ponto.",
+        topics: ["Ponto", "Ajuste", "Colaborador"],
+      },
+      {
+        key: "admissao_iniciada",
+        name: "Admissão iniciada",
+        subject: "[RH] Processo admissional iniciado",
+        description: "Envia o link do processo admissional para o candidato preencher documentos.",
+        topics: ["Admissão", "Candidato", "Sensível"],
+      },
+      {
+        key: "aniversario_colaborador",
+        name: "Aniversário do colaborador",
+        subject: "[RH] Feliz aniversário",
+        description: "Mensagem institucional de aniversário, com publicação opcional no app.",
+        topics: ["Aniversário", "Comunicado", "App"],
+      },
+    ];
+
+    const employees = [
+      { name: "Carlos Alberto Pimentel de Andrade Junior", company: "Prodelar", department: "Diretoria", role: "Diretor", profile: "Diretoria", email: "carlosjrmcz@gmail.com" },
+      { name: "Ana Paula Maia Paiva", company: "Prodelar", department: "Administrativo", role: "Analista de Departamento Pessoal", profile: "RH", email: "anapaula@teste.prodelar" },
+      { name: "Rubenon Honorato da Silva Filho", company: "Prodelar", department: "Administrativo", role: "Analista Financeiro", profile: "Gerente", email: "rubenon@teste.prodelar" },
+      { name: "Joao Lucas Lins dos Santos", company: "Prodelar", department: "Producao", role: "Tecnico Mobiliario", profile: "Colaborador", email: "joao@teste.prodelar" },
+      { name: "Alan David Santos Araujo", company: "Prodelar", department: "Producao", role: "Auxiliar de Montagem", profile: "Colaborador", email: "" },
+      { name: "Ariana da Costa Machado", company: "Colmob", department: "Administrativo", role: "Gerente de Projetos", profile: "Gerente", email: "ariana@teste.prodelar" },
+      { name: "David Santos da Silva", company: "Colmob", department: "Producao", role: "Supervisor de Projetos", profile: "Supervisor", email: "david@teste.prodelar" },
+      { name: "Fernanda Patricia Rocha Cavalcante", company: "Servimec", department: "CBTU VLT", role: "Auxiliar de Escritorio", profile: "RH", email: "fernanda@teste.prodelar" },
+    ];
+
+    const state = {
+      channel: "both",
+      company: "Prodelar",
+      audience: "employee",
+      selectedAudience: null,
+      selectedTemplate: null,
+    };
+
+    const byId = (id) => document.getElementById(id);
+    const normalize = (text) => (text || "").toLowerCase().normalize("NFD").replace(/[\\u0300-\\u036f]/g, "");
+
+    function templateMatches(template, query) {
+      if (!query) return true;
+      const haystack = normalize([template.name, template.subject, template.description, template.topics.join(" ")].join(" "));
+      return haystack.includes(normalize(query));
+    }
+
+    function renderGallery() {
+      const query = byId("template-gallery-search").value;
+      const rows = templates.filter((template) => templateMatches(template, query));
+      byId("template-gallery").innerHTML = rows.map((template) => `
+        <article class="template-row">
+          <div>
+            <strong>${template.name}</strong>
+            <p>${template.description}</p>
+            <div class="tags">${template.topics.map((topic) => `<span class="tag">${topic}</span>`).join("")}</div>
+          </div>
+          <button type="button" data-use-template="${template.key}">Usar modelo</button>
+        </article>
+      `).join("");
+    }
+
+    function channelLabel() {
+      if (state.channel === "email") return "Só e-mail";
+      if (state.channel === "app") return "Só app";
+      return "E-mail + App";
+    }
+
+    function companyLabel() {
+      return state.company === "all" ? "Grupo todo" : state.company;
+    }
+
+    function audienceLabel() {
+      const labels = { employee: "colaborador", department: "setor", role: "cargo", profile: "perfil", all: "todos" };
+      return labels[state.audience] || "colaborador individual";
+    }
+
+    function filteredEmployees() {
+      if (state.company === "all") return employees;
+      return employees.filter((employee) => normalize(employee.company) === normalize(state.company));
+    }
+
+    function renderAudienceFields() {
+      const container = byId("audience-fields");
+      state.selectedAudience = null;
+
+      if (state.audience === "all") {
+        state.selectedAudience = {
+          label: state.company === "all" ? "Todos os colaboradores ativos" : `Todos da ${state.company}`,
+          company: companyLabel(),
+          email: "",
+        };
+        container.innerHTML = `<div class="selected-summary"><div><strong>${state.selectedAudience.label}</strong><span class="subtitle">${companyLabel()} · público selecionado</span></div><button type="button" data-change-audience>Trocar escopo</button></div>`;
+        updatePreview();
+        return;
+      }
+
+      const placeholder = {
+        employee: `Digite nome, e-mail ou setor em ${companyLabel()}`,
+        department: `Digite Producao, Administrativo, CBTU... em ${companyLabel()}`,
+        role: `Digite motorista, projetista, marceneiro... em ${companyLabel()}`,
+        profile: `Digite RH, diretoria, gerente, supervisor... em ${companyLabel()}`,
+      }[state.audience];
+
+      container.innerHTML = `
+        <label class="field">
+          <span>Localizar ${audienceLabel()} em ${companyLabel()}</span>
+          <input id="audience-search" placeholder="${placeholder}" />
+        </label>
+        <div id="audience-results" class="results"></div>
+      `;
+
+      byId("audience-search").addEventListener("input", renderAudienceResults);
+      renderAudienceResults();
+      updatePreview();
+    }
+
+    function renderAudienceResults() {
+      const input = byId("audience-search");
+      const results = byId("audience-results");
+      const query = input.value.trim();
+      if (!query) {
+        results.innerHTML = `<div class="result"><small>Digite para localizar. A lista não fica fixa na tela.</small></div>`;
+        return;
+      }
+
+      let options = [];
+      const base = filteredEmployees();
+      if (state.audience === "employee") {
+        options = base.filter((employee) => normalize(`${employee.name} ${employee.company} ${employee.department} ${employee.role} ${employee.email}`).includes(normalize(query)))
+          .map((employee) => ({
+            label: employee.name,
+            detail: `${employee.company} · ${employee.department} · ${employee.role}${employee.email ? ` · ${employee.email}` : " · sem e-mail cadastrado"}`,
+            company: employee.company,
+            email: employee.email,
+          }));
+      } else if (state.audience === "department") {
+        const departments = [...new Set(base.map((employee) => employee.department))];
+        options = departments.filter((item) => normalize(item).includes(normalize(query)))
+          .map((item) => ({ label: item, detail: `${base.filter((employee) => employee.department === item).length} colaboradores em ${companyLabel()}`, company: companyLabel(), email: "" }));
+      } else if (state.audience === "role") {
+        const roles = [...new Set(base.map((employee) => employee.role))];
+        options = roles.filter((item) => normalize(item).includes(normalize(query)))
+          .map((item) => ({ label: item, detail: `${base.filter((employee) => employee.role === item).length} colaboradores com este cargo`, company: companyLabel(), email: "" }));
+      } else {
+        const profiles = [...new Set(base.map((employee) => employee.profile))];
+        options = profiles.filter((item) => normalize(item).includes(normalize(query)))
+          .map((item) => ({ label: item, detail: `${base.filter((employee) => employee.profile === item).length} colaboradores neste perfil`, company: companyLabel(), email: "" }));
+      }
+
+      results.innerHTML = options.length ? options.map((option) => `
+        <div class="result" data-audience-result="${option.label}" data-company="${option.company}" data-email="${option.email || ""}">
+          <strong>${option.label}</strong>
+          <small>${option.detail}</small>
+        </div>
+      `).join("") : `<div class="result"><small>Nenhum resultado encontrado.</small></div>`;
+    }
+
+    function chooseAudience(label, company, email) {
+      state.selectedAudience = { label, company, email };
+      byId("audience-fields").innerHTML = `
+        <div class="selected-summary">
+          <div><strong>${label}</strong><span class="subtitle">${company || companyLabel()} · público selecionado${email ? ` · ${email}` : ""}</span></div>
+          <button type="button" data-change-audience>Trocar</button>
+        </div>
+      `;
+      updatePreview();
+    }
+
+    function renderTemplateResults() {
+      const query = byId("template-search").value.trim();
+      const results = byId("template-results");
+      if (!query) {
+        results.innerHTML = `<div class="result"><small>Digite para localizar templates. A lista aparece apenas durante a busca.</small></div>`;
+        return;
+      }
+      const rows = templates.filter((template) => templateMatches(template, query));
+      results.innerHTML = rows.length ? rows.map((template) => `
+        <div class="result" data-template-result="${template.key}">
+          <strong>${template.name}</strong>
+          <small>${template.subject}</small>
+        </div>
+      `).join("") : `<div class="result"><small>Nenhum template encontrado.</small></div>`;
+    }
+
+    function chooseTemplate(templateKey) {
+      const template = templates.find((item) => item.key === templateKey);
+      if (!template) return;
+      state.selectedTemplate = template;
+      byId("selected-template").classList.remove("hidden");
+      byId("selected-template").innerHTML = `
+        <div><strong>${template.name}</strong><span class="subtitle">${template.subject}</span></div>
+        <button type="button" data-change-template>Trocar</button>
+      `;
+      byId("template-search-wrap").classList.add("hidden");
+      byId("template-results").innerHTML = "";
+      updatePreview();
+    }
+
+    function openCompose(templateKey) {
+      byId("home-screen").classList.add("hidden");
+      byId("compose-screen").classList.remove("hidden");
+      if (templateKey) chooseTemplate(templateKey);
+      renderAudienceFields();
+      updatePreview();
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+
+    function updatePreview() {
+      const selectedHasNoEmail = state.audience === "employee" && state.selectedAudience && !state.selectedAudience.email;
+      const appWillBeUsed = state.channel !== "email" || selectedHasNoEmail;
+      const emailWillBeUsed = state.channel !== "app" && !selectedHasNoEmail;
+      const versions = [
+        emailWillBeUsed ? "E-mail" : "",
+        appWillBeUsed ? "App" : "",
+      ].filter(Boolean).join(" + ") || "Nenhuma";
+      const deliveryText = selectedHasNoEmail && state.channel !== "app"
+        ? `${channelLabel()} · sem e-mail cadastrado, seguirá pelo App`
+        : `${channelLabel()} · ${audienceLabel()} · ${companyLabel()}`;
+
+      byId("delivery-summary").textContent = deliveryText;
+      byId("preview-channel").textContent = selectedHasNoEmail && state.channel !== "app" ? `${channelLabel()} com fallback para App` : channelLabel();
+      byId("preview-versions").textContent = versions;
+      byId("preview-recipient").textContent = state.selectedAudience?.label || "Não selecionado";
+      byId("preview-company").textContent = state.selectedAudience?.company || companyLabel();
+      byId("preview-title").textContent = state.selectedTemplate?.subject || "Selecione um template";
+      byId("preview-greeting").textContent = state.selectedAudience && state.selectedTemplate
+        ? `Olá ${state.audience === "employee" ? state.selectedAudience.label.split(" ")[0] : "equipe"}, esta é a versão final antes do envio.`
+        : "Escolha o público e o modelo para ver a mensagem final.";
+      byId("mail-logo").textContent = state.selectedAudience?.company || companyLabel();
+      byId("app-preview").textContent = appWillBeUsed
+        ? selectedHasNoEmail
+          ? "Sem e-mail cadastrado: a comunicação será entregue somente pelo app."
+          : "A versão no app será publicada para o público selecionado."
+        : "Somente e-mail: não será criado card no app.";
+      byId("ready-tag").textContent = selectedHasNoEmail && state.channel !== "app"
+        ? "Sem e-mail: App"
+        : state.selectedAudience && state.selectedTemplate ? "Pronto para revisar" : "Aguardando dados";
+    }
+
+    document.addEventListener("click", (event) => {
+      const target = event.target.closest("[data-start], [data-use-template], [data-channel], [data-company], [data-audience], [data-audience-result], [data-template-result], [data-change-template], [data-change-audience], #back-home");
+      if (!target) return;
+
+      if (target.dataset.start) {
+        state.channel = target.dataset.start;
+        openCompose();
+      } else if (target.dataset.useTemplate) {
+        state.channel = "both";
+        openCompose(target.dataset.useTemplate);
+      } else if (target.dataset.channel) {
+        state.channel = target.dataset.channel;
+        document.querySelectorAll("[data-channel]").forEach((button) => button.classList.toggle("active", button === target));
+        updatePreview();
+      } else if (target.dataset.company) {
+        state.company = target.dataset.company;
+        document.querySelectorAll("[data-company]").forEach((button) => button.classList.toggle("active", button === target));
+        renderAudienceFields();
+      } else if (target.dataset.audience) {
+        state.audience = target.dataset.audience;
+        document.querySelectorAll("[data-audience]").forEach((button) => button.classList.toggle("active", button === target));
+        renderAudienceFields();
+      } else if (target.dataset.audienceResult) {
+        chooseAudience(target.dataset.audienceResult, target.dataset.company, target.dataset.email);
+      } else if (target.dataset.templateResult) {
+        chooseTemplate(target.dataset.templateResult);
+      } else if (target.dataset.changeTemplate !== undefined) {
+        state.selectedTemplate = null;
+        byId("selected-template").classList.add("hidden");
+        byId("template-search-wrap").classList.remove("hidden");
+        byId("template-search").value = "";
+        renderTemplateResults();
+        updatePreview();
+      } else if (target.dataset.changeAudience !== undefined) {
+        renderAudienceFields();
+      } else if (target.id === "back-home") {
+        byId("compose-screen").classList.add("hidden");
+        byId("home-screen").classList.remove("hidden");
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      }
+    });
+
+    byId("template-gallery-search").addEventListener("input", renderGallery);
+    byId("template-search").addEventListener("input", renderTemplateResults);
+    byId("deadline").addEventListener("input", updatePreview);
+    byId("note").addEventListener("input", updatePreview);
+
+    renderGallery();
+    renderTemplateResults();
+  </script>
+</body>
+</html>

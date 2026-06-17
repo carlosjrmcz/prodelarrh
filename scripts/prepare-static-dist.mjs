@@ -96,6 +96,12 @@ async function createWorkspaceConfig() {
   await writeFile("services/googleWorkspaceConfig.js", fallback);
 }
 
+async function createRuntimeEnv() {
+  if (await pathExists(path.join(root, "services/runtimeEnv.js"))) {
+    await copyFile("services/runtimeEnv.js", "services/runtimeEnv.js");
+  }
+}
+
 async function writeStaticHostFiles() {
   await writeFile(
     "_headers",
@@ -132,6 +138,7 @@ const emailQueueScript = await minifyScript("services/emailQueue.js", "services/
 const workspaceStorageScript = await minifyScript("services/googleWorkspaceStorage.js", "services/googleWorkspaceStorage.js");
 const supabaseVendor = await minifyScript("node_modules/@supabase/supabase-js/dist/umd/supabase.js", "vendor/supabase.js");
 await createWorkspaceConfig();
+await createRuntimeEnv();
 await writeStaticHostFiles();
 
 const indexPath = path.join(dist, "index.html");

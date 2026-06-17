@@ -15,10 +15,11 @@ const SUPABASE_URL = runtimeEnv.VITE_SUPABASE_URL || "";
 const SUPABASE_ANON_KEY = runtimeEnv.VITE_SUPABASE_ANON_KEY || runtimeEnv.VITE_SUPABASE_PUBLISHABLE_KEY || "";
 const supabaseUrl = SUPABASE_URL;
 const supabaseKey = SUPABASE_ANON_KEY;
-const APP_VERSION = "20260609-supabase-runtime";
+const APP_VERSION = "20260617-aso-epi-impersonation";
+const PUBLIC_APP_URL = "https://rhprodelar.netlify.app/";
 
 if (window.location.protocol === "file:") {
-  window.location.replace(`http://127.0.0.1:5180/?r=${APP_VERSION}`);
+  window.location.replace(`http://127.0.0.1:5174/?r=${APP_VERSION}`);
 }
 
 function syncAppVersionUrl() {
@@ -308,6 +309,19 @@ const leaderRequestTypes = [
 
 const peopleControlModules = [
   {
+    key: "admissionProcess",
+    title: "Processo admissional",
+    fullTitle: "Processo admissional de candidato",
+    owner: "RH",
+    status: "Candidato → empregado",
+    sensitivity: "Privado",
+    receives: false,
+    description: "Pré-cadastro do candidato, link de preenchimento documental e conversão posterior em colaborador.",
+    formFields: [],
+    history: [["Pré-admissão criada", "Candidato", "Aguardando documentação"]],
+    executive: "Acompanhar admissões aprovadas e pendências documentais sem criar vínculo de empregado antes da hora.",
+  },
+  {
     key: "aso",
     title: "ASO",
     fullTitle: "ASO e medicina do trabalho",
@@ -484,6 +498,12 @@ const peopleControlModules = [
   },
 ];
 
+const hiddenPeopleControlModuleKeys = new Set(["communications", "timeline"]);
+
+function visiblePeopleControlModules() {
+  return peopleControlModules.filter((module) => !hiddenPeopleControlModuleKeys.has(module.key));
+}
+
 const executiveAlerts = [
   ["ASO vencido crítico", "2 colaboradores", "Saúde ocupacional"],
   ["Férias vencidas/próximas", "6 períodos", "DP/RH"],
@@ -492,16 +512,20 @@ const executiveAlerts = [
   ["Solicitações críticas", "1 pendência", "Diretoria"],
 ];
 
-const requestLanes = ["Aberto", "Aguardando esclarecimento", "Em análise", "Aguardando aprovação", "Em execução", "Concluído", "Reprovado"];
+const requestLanes = ["Aberto", "Aguardando esclarecimento", "Em análise", "Aguardando aprovação", "Em execução"];
+const requestTerminalStatuses = ["Concluído", "Reprovado", "Cancelado", "Arquivado", "completed", "rejected", "cancelled", "archived"];
 const requestLaneHints = {
   Aberto: "Entrada criada e aguardando triagem",
   "Aguardando esclarecimento": "Solicitante precisa complementar",
   "Em análise": "Responsável atual conferindo dados",
   "Aguardando aprovação": "Supervisor, gerência ou diretoria decide",
   "Em execução": "RH/área responsável executando",
-  Concluído: "Finalizado com histórico",
-  Reprovado: "Encerrado sem execução",
 };
+
+function isTerminalRequestStatus(status) {
+  const normalized = normalizeText(status);
+  return requestTerminalStatuses.some((terminal) => normalizeText(terminal) === normalized);
+}
 
 const requestWorkflow = {
   Aberto: {
@@ -576,6 +600,7 @@ const state = {
   timelineFilter: "all",
   formMessage: "",
   peopleControlActiveModule: "aso",
+  peopleControlEmployeeId: "",
   peopleControlMessage: "",
   announcementQuery: "",
   announcementEmployeeId: "",
@@ -584,6 +609,7 @@ const state = {
   announcementResult: "",
   emailReviewMessage: "",
   communicationMessage: "",
+  communicationConfirmOpen: false,
   communicationQueueQuery: "",
   communicationTemplateQuery: "",
   communicationRecipientQuery: "",
@@ -593,8 +619,14 @@ const state = {
   communicationRecurrence: "unico",
   communicationScheduleEnabled: false,
   communicationScheduledAt: "",
+  communicationSubject: "",
   communicationDeadline: "",
   communicationNote: "",
+  communicationChannel: "both",
+  communicationCompany: "Prodelar",
+  communicationAudience: "employee",
+  communicationAudienceValue: "",
+  communicationGalleryQuery: "",
   rhTaskMessage: "",
   rhTaskStatusFilter: "open",
   rhTaskTypeFilter: "all",
@@ -610,6 +642,11 @@ const state = {
   vacationMessage: "",
   pointMessage: "",
   pointAdjustmentOpen: false,
+  pointExpandedAdjustmentId: "",
+  publicAdmissionToken: "",
+  publicAdmissionCandidate: null,
+  publicAdmissionMessage: "",
+  lastAdmissionCandidateToken: "",
   authMode: "login",
   authMessage: "",
   authSession: null,
@@ -628,9 +665,13 @@ let vacationRows = sampleVacationRows;
 let vacationForecasts = [];
 let registrationCards = [];
 let paystubRecords = [];
+let employeeDocumentRecords = [];
 let employeeTimelineEvents = [];
 let emailReviewEvents = [];
 let emailTemplateRows = [];
+let monthlyRoutineRows = [];
+let accountingPackageRows = [];
+let announcementRows = [];
 let vacationSearchDebounce = null;
 let lightweightRenderTimer = null;
 let renderMemo = {};
@@ -681,7 +722,7 @@ function prepareDerivedFields() {
     employee._companyKey = normalizeText(employee.company);
     employee._managerKey = normalizeText(employee.manager);
     employee._statusKey = normalizeText(employee.status);
-    employee._search = normalizeText(`${employee.name} ${employee.company} ${employee.department} ${employee.role} ${employee.manager} ${employee.id}`);
+    employee._search = normalizeText(`${employee.name} ${employee.company} ${employee.department} ${employee.role} ${employee.manager} ${employee.email} ${employee.id}`);
   });
   requests.forEach((request) => {
     request._companyKey = normalizeText(request.company);
@@ -808,8 +849,7 @@ const pages = [
       ["peopleControls", "◇", "Controles RH", ["RH", "Diretoria"]],
       ["rhRoutines", "☑", "Rotinas / Importações RH", ["RH", "Diretoria"]],
       ["accounting", "⇪", "Pacote mensal", ["RH", "Diretoria"]],
-      ["emails", "✉", "E-mails", ["RH", "Diretoria"]],
-      ["announcement", "+", "Novo Comunicado", ["RH", "Diretoria"]],
+      ["emails", "✉", "Comunicação RH", ["RH", "Diretoria"]],
       ["emailReview", "✓", "Aprovar e-mails", ["RH"]],
       ["masterData", "◎", "Empresas e setores", ["RH", "Diretoria"]],
       ["hierarchy", "⇄", "Hierarquia", ["RH", "Diretoria"]],
@@ -823,7 +863,7 @@ const pages = [
 const titles = {
   dashboard: ["Dashboard RH", "Mesa de trabalho por perfil: pendências, decisões, rotinas e visão executiva."],
   employees: ["Colaboradores", "Base inicial ativa/inativa para consulta do RH e líderes."],
-  employeeForm: ["Novo colaborador", "Cadastro inicial com fallback local enquanto RLS bloqueia gravação pública."],
+  employeeForm: ["Novo colaborador", "Cadastro inicial do colaborador, incluindo e-mail para comunicação."],
   requests: ["Solicitações", "Pipeline de tickets entre colaborador, líder, RH e diretoria."],
   requestForm: ["Nova solicitação", "Abertura de ticket operacional para RH, liderança e diretoria."],
   documents: ["Documentos", "Biblioteca controlada por sensibilidade e perfil de acesso."],
@@ -837,11 +877,11 @@ const titles = {
   time: ["Ajuste no ponto", "Ajustes da equipe e validação mensal do ponto antes da folha."],
   portal: ["Meu portal", "Painel do colaborador com solicitações, contracheques, férias e comunicados do RH."],
   rhRoutines: ["Rotinas / Importações RH", "Checklists e importações recorrentes por empresa para manter a base confiável."],
-  peopleControls: ["Controles RH", "ASO, atestados, treinamentos, EPI, experiência, benefícios, mural e linha do tempo."],
+  peopleControls: ["Controles RH", "ASO, atestados, treinamentos, EPI, experiência, benefícios e controles administrativos."],
   accounting: ["Pacote mensal", "Envio rastreável para contabilidade/Mastermaq por competência."],
   paystubs: ["Contracheques", "Processamento do PDF único em arquivos individuais por colaborador."],
-  emails: ["Central de e-mails", "Fila transacional para notificações, aprovações, comunicados e portal."],
-  announcement: ["Novo Comunicado", "Comunicado individual avulso para colaborador, com preview e fila segura de e-mail."],
+  emails: ["Central de Comunicação RH", "E-mails, comunicados no app, agendamentos e prévia final em uma única tela."],
+  announcement: ["Central de Comunicação RH", "E-mails, comunicados no app, agendamentos e prévia final em uma única tela."],
   emailReview: ["Aprovação de e-mails", "Fila de eventos aguardando revisão antes do envio."],
 };
 
@@ -864,6 +904,27 @@ function statusPill(value) {
 function companyLogo(company) {
   const item = companies.find((entry) => entry.key === company || entry.code === String(company).toUpperCase()) || companies[0];
   return `<span class="company-logo ${item.logoClass}"><img src="${item.logo}" alt="${item.label}" loading="lazy" decoding="async" /></span>`;
+}
+
+function companyLogoUrl(company) {
+  const item = companies.find((entry) => entry.key === company || entry.code === String(company).toUpperCase()) || companies[0];
+  try {
+    return new URL(item.logo, window.location.origin).href;
+  } catch {
+    return item.logo;
+  }
+}
+
+function companyEmailLogoUrl(company) {
+  const key = normalizeText(company);
+  const urls = {
+    PRODELAR: `${PUBLIC_APP_URL}assets/logo-prodelar.jpg`,
+    COLMOB: `${PUBLIC_APP_URL}assets/logo-colmob.jpg`,
+    SERVIMEC: `${PUBLIC_APP_URL}assets/logo-servimec.jpg`,
+  };
+  if (key.includes("COLMOB")) return urls.COLMOB;
+  if (key.includes("SERVIMEC")) return urls.SERVIMEC;
+  return urls.PRODELAR;
 }
 
 function normalizeText(value) {
@@ -930,12 +991,28 @@ function safeJsonParse(value, fallback) {
   }
 }
 
-const runtimeCacheKey = "rhRuntimeDataCache:v2";
+const runtimeCacheKey = "rhRuntimeDataCache:v3";
 const runtimeCacheTtlMs = 30 * 60 * 1000;
 let supabaseLoadInFlight = null;
 
+function hasCommunicationTemplates(rows = emailTemplateRows) {
+  return Array.isArray(rows) && rows.some((row) => row && row.template_key);
+}
+
+function clearRuntimeDataCache() {
+  try {
+    localStorage.removeItem(runtimeCacheKey);
+  } catch {
+    // Cache local é aceleração; se não puder limpar, o carregamento fresco ainda corrige a sessão.
+  }
+}
+
 function applyRuntimeDataCache(cache) {
   if (!cache || !Array.isArray(cache.employees)) return false;
+  if (!hasCommunicationTemplates(cache.emailTemplateRows)) {
+    clearRuntimeDataCache();
+    return false;
+  }
   employees = cache.employees;
   requests = Array.isArray(cache.requests) ? cache.requests : [];
   documents = Array.isArray(cache.documents) ? cache.documents : [];
@@ -943,6 +1020,7 @@ function applyRuntimeDataCache(cache) {
   vacationRows = Array.isArray(cache.vacationRows) ? cache.vacationRows : [];
   registrationCards = Array.isArray(cache.registrationCards) ? cache.registrationCards : [];
   paystubRecords = Array.isArray(cache.paystubRecords) ? cache.paystubRecords : [];
+  employeeDocumentRecords = Array.isArray(cache.employeeDocumentRecords) ? cache.employeeDocumentRecords : [];
   employeeTimelineEvents = Array.isArray(cache.employeeTimelineEvents) ? cache.employeeTimelineEvents : [];
   emailReviewEvents = Array.isArray(cache.emailReviewEvents) ? cache.emailReviewEvents : [];
   emailTemplateRows = Array.isArray(cache.emailTemplateRows) ? cache.emailTemplateRows : [];
@@ -973,6 +1051,7 @@ function saveRuntimeDataCache() {
         vacationRows,
         registrationCards,
         paystubRecords,
+        employeeDocumentRecords,
         employeeTimelineEvents,
         emailReviewEvents,
         emailTemplateRows,
@@ -995,6 +1074,7 @@ function clearSampleDataForSupabaseBoot() {
   vacationRows = [];
   registrationCards = [];
   paystubRecords = [];
+  employeeDocumentRecords = [];
   employeeTimelineEvents = [];
   emailReviewEvents = [];
   emailTemplateRows = [];
@@ -1006,19 +1086,25 @@ function runtimeDataPayloadSignature(payload = {}) {
   const employeeRows = payload.employees || employees;
   const requestRows = payload.requests || requests;
   const documentRows = payload.documents || documents;
+  const employeeDocumentRows = payload.employeeDocumentRecords || employeeDocumentRecords;
   const vacationRowsForSignature = payload.vacationForecasts || vacationForecasts;
   const paystubRows = payload.paystubRecords || paystubRecords;
   const timelineRows = payload.employeeTimelineEvents || employeeTimelineEvents;
   const emailReviewRows = payload.emailReviewEvents || emailReviewEvents;
+  const templateRows = payload.emailTemplateRows || emailTemplateRows;
   const tailOf = (rows) => rows[rows.length - 1] || {};
-  const counts = [employeeRows.length, requestRows.length, documentRows.length, vacationRowsForSignature.length, paystubRows.length, timelineRows.length, emailReviewRows.length];
+  const firstEmailRow = emailReviewRows[0] || {};
+  const firstTemplateRow = templateRows[0] || {};
+  const counts = [employeeRows.length, requestRows.length, documentRows.length, employeeDocumentRows.length, vacationRowsForSignature.length, paystubRows.length, timelineRows.length, emailReviewRows.length, templateRows.length];
   const markers = [
     tailOf(employeeRows).id || "",
     requestRows[0]?.protocol || requestRows[0]?.id || "",
     vacationRowsForSignature[0]?.id || vacationRowsForSignature[0]?.employee_name || "",
+    employeeDocumentRows[0]?.id || employeeDocumentRows[0]?.file_name || "",
     paystubRows[0]?.id || paystubRows[0]?.file_name || "",
     timelineRows[0]?.id || timelineRows[0]?.title || "",
-    emailReviewRows[0]?.id || emailReviewRows[0]?.template_key || "",
+    [firstEmailRow.id, firstEmailRow.status, firstEmailRow.sent_at, firstEmailRow.last_error].filter(Boolean).join("|") || firstEmailRow.template_key || "",
+    [firstTemplateRow.template_key, firstTemplateRow.subject_template, firstTemplateRow.is_active].filter(Boolean).join("|"),
   ];
   return `${counts.join(":")}|${markers.map(normalizeText).join(":")}`;
 }
@@ -1125,14 +1211,7 @@ function appProfileFromRoleCode(roleCode) {
   return "Colaborador";
 }
 
-const testSwitcherUsers = [
-  { label: "👑 Diretor", profile: "Diretoria", email: "teste.diretor@teste.prodelar" },
-  { label: "👩‍💼 RH", profile: "RH", email: "teste.rh@teste.prodelar" },
-  { label: "💰 Financeiro", roleCode: "gestor_financeiro", email: "teste.financeiro@teste.prodelar" },
-  { label: "🧑‍💼 Gerente", profile: "Gerente", email: "teste.gerente@teste.prodelar" },
-  { label: "👷 Supervisor", profile: "Supervisor", email: "teste.supervisor@teste.prodelar" },
-  { label: "👤 Colaborador", profile: "Colaborador", email: "teste.colaborador@teste.prodelar" },
-];
+const testSwitcherUsers = [];
 
 function removeTestSwitcher() {
   document.getElementById("test-user-switcher")?.remove();
@@ -1144,53 +1223,15 @@ function currentTestSwitcherEmail(user = currentUser) {
 }
 
 function isTestSwitcherUser(user = currentUser) {
-  return currentTestSwitcherEmail(user).includes("@teste.prodelar");
+  return false;
 }
 
 function renderTestSwitcher(user = currentUser) {
-  if (!isTestSwitcherUser(user) || !supabaseClient?.auth) {
-    removeTestSwitcher();
-    return;
-  }
-
-  const currentEmail = currentTestSwitcherEmail(user);
-  let bar = document.getElementById("test-user-switcher");
-  if (!bar) {
-    bar = document.createElement("div");
-    bar.id = "test-user-switcher";
-    document.body.prepend(bar);
-    bar.addEventListener("click", async (event) => {
-      const button = event.target.closest("[data-test-switch-email]");
-      if (!button || button.disabled) return;
-      const email = button.dataset.testSwitchEmail;
-      button.disabled = true;
-      button.textContent = "Trocando...";
-      const { error } = await supabaseClient.auth.signInWithPassword({
-        email,
-        password: "Teste@2024",
-      });
-      if (error) {
-        button.disabled = false;
-        button.textContent = "Erro";
-        console.error("Erro ao trocar usuário de teste", error);
-        return;
-      }
-      window.location.reload();
-    });
-  }
-
-  bar.className = "test-user-switcher";
-  bar.innerHTML = testSwitcherUsers
-    .map((item) => {
-      const active = item.email.toLowerCase() === currentEmail;
-      return `<button type="button" class="${active ? "active" : ""}" data-test-switch-email="${escapeHtml(item.email)}">${active ? "✓ " : ""}${escapeHtml(item.label)}</button>`;
-    })
-    .join("");
-  document.body.style.paddingTop = "36px";
+  removeTestSwitcher();
 }
 
 function isImpersonationAdmin(user = currentUser) {
-  return String(user?.email || state.authUser?.email || state.authProfile?.email || "").trim().toLowerCase() === "carlosjrmcz@gmail.com";
+  return currentTestSwitcherEmail(user) === "carlosjrmcz@gmail.com";
 }
 
 function removeImpersonationBar() {
@@ -1218,6 +1259,10 @@ function getEffectiveRoleCode() {
   return window._impersonatedEmployee?.roleCode || state.authProfile?.role_code || currentUser.role || currentUser.profile || "";
 }
 
+function getEffectiveManagerId() {
+  return window._impersonatedEmployee?.managerId || currentEmployeeRecord()?.managerEmployeeId || "";
+}
+
 function inferredRoleCodeForImpersonation(employee, roleCode) {
   if (roleCode && roleCode !== "colaborador") return roleCode;
   const name = normalizeText(employee?.full_name || "");
@@ -1231,73 +1276,78 @@ function inferredRoleCodeForImpersonation(employee, roleCode) {
 }
 
 async function renderImpersonationBar(user = currentUser) {
-  if (!isImpersonationAdmin(user) || !supabaseClient) {
-    removeImpersonationBar();
-    return;
-  }
+  removeImpersonationBar();
+  if (!isImpersonationAdmin(user)) return;
+  if (!supabaseClient) return;
 
-  let bar = document.getElementById("impersonation-bar");
-  if (!bar) {
-    bar = document.createElement("div");
-    bar.id = "impersonation-bar";
-    document.body.prepend(bar);
-    bar.addEventListener("change", (event) => {
-      if (event.target?.id === "imp-select") applyImpersonation(event.target.value);
+  if (!window._impersonationEmployees?.length) {
+    const [{ data: employeesData, error: employeesError }, { data: profilesData }] = await Promise.all([
+      supabaseClient
+        .from("hr_employee_directory")
+        .select("id, full_name, status, company_name, department_name, position_name, manager_name")
+        .order("full_name"),
+      supabaseClient.from("hr_profiles").select("employee_id,role_code,is_active"),
+    ]);
+    if (employeesError) {
+      console.warn("Impersonação indisponível:", employeesError.message);
+      return;
+    }
+    window._impersonationEmployees = (employeesData || []).filter((employee) => {
+      const status = normalizeText(employee.status || "");
+      return !status || ["ACTIVE", "ATIVO"].includes(status);
     });
-    bar.addEventListener("click", (event) => {
-      if (event.target.closest("[data-clear-impersonation]")) clearImpersonation();
-    });
+    window._impersonationRoles = new Map(
+      (profilesData || [])
+        .filter((profile) => profile.employee_id)
+        .map((profile) => [profile.employee_id, profile.role_code || "colaborador"]),
+    );
   }
 
-  const { data: employeesRows, error } = await supabaseClient
-    .from("hr_employee_directory")
-    .select("id, full_name, status, company_name, department_name, position_name, manager_name")
-    .eq("status", "active")
-    .order("full_name");
+  const selectedEmployeeId = window._impersonatedEmployee?.employeeId || "";
+  const options = (window._impersonationEmployees || [])
+    .map((employee) => {
+      const detail = [employee.company_name, employee.department_name, employee.position_name].filter(Boolean).join(" · ");
+      return `<option value="${escapeHtml(employee.id)}" ${employee.id === selectedEmployeeId ? "selected" : ""}>${escapeHtml(`${employee.full_name}${detail ? ` · ${detail}` : ""}`)}</option>`;
+    })
+    .join("");
 
-  if (error) {
-    console.warn("Erro ao carregar colaboradores para impersonação:", error.message);
-    return;
-  }
-
-  const employeeIds = (employeesRows || []).map((employee) => employee.id);
-  const { data: profileRows } = employeeIds.length
-    ? await supabaseClient.from("hr_profiles").select("employee_id, role_code").in("employee_id", employeeIds)
-    : { data: [] };
-  const roleByEmployee = new Map((profileRows || []).map((profile) => [profile.employee_id, profile.role_code]));
-
+  const selected = window._impersonatedEmployee;
+  const bar = document.createElement("div");
+  bar.id = "impersonation-bar";
   bar.style.cssText = `
-    position: fixed; top: 0; left: 0; right: 0; z-index: 9999;
-    background: #1a3a5c; padding: 8px 16px;
-    display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
-    font-size: 12px; border-bottom: 2px solid #e87722;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 9999;
+    background: #0f2744;
+    border-bottom: 3px solid #e87722;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 41px;
+    padding: 6px 16px;
+    box-sizing: border-box;
+    font-size: 12px;
   `;
-
   bar.innerHTML = `
-    <span style="color:#8bacc8;font-weight:600">MODO TESTE:</span>
-    <select id="imp-select" style="background:#fff;border:none;padding:4px 8px;border-radius:4px;font-size:12px;max-width:360px">
-      <option value="">- Agir como colaborador -</option>
-      ${(employeesRows || []).map((employee) => `
-        <option value="${escapeHtml(employee.id)}" ${impersonating?.employeeId === employee.id ? "selected" : ""}>
-          ${escapeHtml(employee.full_name)} · ${escapeHtml(employee.company_name || "")} · ${escapeHtml(employee.position_name || "")}
-        </option>
-      `).join("")}
+    <strong style="color:#e87722;letter-spacing:.04em">MODO IMPERSONAÇÃO</strong>
+    <span style="color:#a8bfd4">Agir como:</span>
+    <select id="impersonation-select" onchange="applyImpersonation(this.value)" style="width:min(480px,42vw);height:28px;border:0;border-radius:4px;padding:0 8px;font-size:12px;background:#fff;color:#102033">
+      <option value="">Carlos Junior Admin Teste · Diretoria</option>
+      ${options}
     </select>
-    ${impersonating ? `
-      <span style="color:#e87722;font-weight:600">✓ ${escapeHtml(impersonating.employeeName)}</span>
-      <span style="color:#8bacc8">Chefe: ${escapeHtml(impersonating.managerName || "sem gestor")}</span>
-      <span style="background:${getRoleColor(impersonating.roleCode)};color:#fff;padding:2px 8px;border-radius:4px">
-        ${escapeHtml(impersonating.roleCode)}
-      </span>
-      <button type="button" data-clear-impersonation style="background:#FCEBEB;color:#A32D2D;border:none;padding:3px 10px;border-radius:4px;cursor:pointer;font-size:11px">
-        Sair
-      </button>
-    ` : ""}
-    <span style="color:#5a7a9a;font-size:10px;margin-left:auto">MODO TESTE - remover antes do go-live</span>
+    ${
+      selected
+        ? `<span style="background:#e87722;color:#102033;padding:3px 10px;border-radius:4px;font-weight:800">${escapeHtml(selected.employeeName)}</span>
+           <span style="color:#a8d5b5">Chefe: ${escapeHtml(selected.managerName || "sem gestor")} · Role: ${escapeHtml(selected.roleCode || "colaborador")} · ${escapeHtml(selected.companyName || "")}</span>
+           <button type="button" onclick="clearImpersonation()" style="background:#FCEBEB;color:#A32D2D;border:0;padding:4px 10px;border-radius:4px;cursor:pointer;font-size:11px">Sair</button>`
+        : `<span style="color:#a8bfd4">Nenhum colaborador selecionado; vendo como diretor.</span>`
+    }
+    <span style="margin-left:auto;color:#7f9ab5;font-size:10px">Remover antes do go-live</span>
   `;
-
-  window._impersonationEmployees = employeesRows || [];
-  window._impersonationRoles = roleByEmployee;
+  document.body.prepend(bar);
   document.body.style.paddingTop = "44px";
 }
 
@@ -1469,13 +1519,18 @@ async function loginWithCPF(cpf, senha) {
   const cpfLimpo = digitsOnly(loginValue);
   let email = loginValue.includes("@") ? loginValue : "";
   if (!email) {
-    const { data: emp, error: empError } = await supabaseClient
-      .from("hr_employees")
-      .select("email, full_name, id")
-      .or(`cpf.eq.${cpfLimpo},cpf.eq.${cpfLimpo.padStart(11, "0")}`)
-      .maybeSingle();
-    if (empError || !emp?.email) return { error: "CPF não encontrado no sistema." };
-    email = emp.email;
+    if (cpfLimpo.length >= 10) {
+      const { data: emp, error: empError } = await supabaseClient
+        .from("hr_employees")
+        .select("email, full_name, id")
+        .or(`cpf.eq.${cpfLimpo},cpf.eq.${cpfLimpo.padStart(11, "0")}`)
+        .maybeSingle();
+      if (empError || !emp?.email) return { error: "CPF não encontrado no sistema." };
+      email = emp.email;
+    } else {
+      const username = normalizeLoginUsername(loginValue);
+      email = `${username}@acesso.prodelar.local`;
+    }
   }
   const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password: senha });
   if (error) return { error: "Senha incorreta ou usuário sem acesso." };
@@ -1544,6 +1599,22 @@ function routineCompetenceLabel(monthKey = routineCompetence()) {
   return formatPaystubCompetence(`${monthKey}-01`);
 }
 
+function monthKeyFromDate(value) {
+  if (!value) return "";
+  const raw = String(value);
+  const iso = raw.match(/^(\d{4})-(\d{2})/);
+  return iso ? `${iso[1]}-${iso[2]}` : raw.slice(0, 7);
+}
+
+function companyKeyFromId(companyId) {
+  const map = {
+    "facacbbd-88d5-4d64-8bee-b539b9613aa1": "Prodelar",
+    "ca8e758e-ee0e-4980-85cc-d36feb13330f": "Colmob",
+    "7553b188-d622-42ef-a353-46a87b500a79": "Servimec",
+  };
+  return map[String(companyId || "")] || "";
+}
+
 function supabaseStoragePublicUrl(bucket, path) {
   if (!bucket || !path || !supabaseClient) return "";
   return supabaseClient.storage.from(bucket).getPublicUrl(path).data?.publicUrl || "";
@@ -1553,10 +1624,20 @@ function isSamePerson(a, b) {
   return normalizeText(a) === normalizeText(b);
 }
 
+function normalizeLoginUsername(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+}
+
 function isLeaderNameMatch(manager, leaderName) {
   const managerText = normalizeText(manager);
   const leaderText = normalizeText(leaderName);
   if (!managerText || !leaderText) return false;
+  if (managerText.includes("CARLOS ALBERTO PIMENTEL") && (leaderText.includes("CARLOS JUNIOR") || leaderText.includes("CARLOS JR"))) return true;
+  if (leaderText.includes("CARLOS ALBERTO PIMENTEL") && (managerText.includes("CARLOS JUNIOR") || managerText.includes("CARLOS JR"))) return true;
   if (managerText === leaderText || managerText.includes(leaderText) || leaderText.includes(managerText)) return true;
   const managerParts = managerText.split(" ").filter((part) => part.length > 2);
   const leaderParts = leaderText.split(" ").filter((part) => part.length > 2);
@@ -1594,9 +1675,17 @@ function ensureSimulationPeople() {
 function simulatedProfileForEmployee(employee) {
   const seed = simulationSeedPeople.find((person) => isSamePerson(person.name, employee.name));
   if (seed) return seed.profile;
+  const fromRoleCode = appProfileFromRoleCode(employee.roleCode || employee.role_code || "");
+  if (fromRoleCode !== "Colaborador") return fromRoleCode;
+  const leadershipLevel = normalizeText(employee.leadershipLevel || employee.leadership_level || "");
+  if (["HR", "RH"].includes(leadershipLevel)) return "RH";
+  if (["DIRECTOR", "DIRETOR", "DIRETORIA"].includes(leadershipLevel)) return "Diretoria";
+  if (["MANAGER", "GERENTE", "GESTOR"].includes(leadershipLevel)) return "Gerente";
+  if (["SUPERVISOR", "LIDER", "LEADER"].includes(leadershipLevel)) return "Supervisor";
   if (containsAny(employee.name, ["CARLOS JUNIOR", "ANDERSON NASCIMENTO"])) return "Diretoria";
   if (containsAny(employee.name, ["ANA PAULA"])) return "RH";
-  if (containsAny(employee.name, ["LUIZ FELIPE", "ANGELO DA GAMA", "LYSIANE", "RUBENON"])) return "Supervisor";
+  if (containsAny(employee.name, ["RUBENON"]) || containsAny(employee.role, ["FINANCEIR"])) return "Gerente";
+  if (containsAny(employee.name, ["LUIZ FELIPE", "ANGELO DA GAMA", "LYSIANE"])) return "Supervisor";
   if (containsAny(employee.name, ["MARIA ANDRESSA", "JOSE JOELLINGTON", "JONATHAN ALEXANDRE"])) return "Gerente";
   return "Colaborador";
 }
@@ -1736,7 +1825,8 @@ function teamEmployeesForCurrentUser() {
           directSupervisors.some((supervisor) => isLeaderNameMatch(employee.manager, supervisor)),
       );
     }
-    if (currentUser.profile === "RH" || currentUser.profile === "Diretoria") return employees;
+    if (currentUser.profile === "RH") return employees;
+    if (currentUser.profile === "Diretoria") return employeesInLeadershipTree(currentUser.name);
     const own = currentEmployeeRecord();
     return own ? [own] : [];
   });
@@ -1751,6 +1841,33 @@ function employeesManagedBy(leaderName) {
       .filter((employee) => isLeaderNameMatch(employee.manager, leaderName))
       .forEach((employee) => rows.set(employee.id, employee));
     return Array.from(rows.values());
+  });
+}
+
+function employeesInLeadershipTree(leaderName) {
+  const leaderKey = normalizeText(leaderName);
+  if (!leaderKey) return [];
+  return memoValue(`tree:${leaderKey}`, () => {
+    const rows = [];
+    employees.forEach((employee) => {
+      if (isSamePerson(employee.name, leaderName)) return;
+      const visited = new Set();
+      let managerName = employee.manager;
+      let depth = 0;
+      while (managerName && depth < 12) {
+        const managerKey = normalizeText(managerName);
+        if (!managerKey || visited.has(managerKey) || ["SEM LIDER", "CONSULTAR FICHA", "CONSELHO/DIRETORIA"].includes(managerKey)) break;
+        if (isLeaderNameMatch(managerName, leaderName)) {
+          rows.push(employee);
+          break;
+        }
+        visited.add(managerKey);
+        const manager = employees.find((item) => isSamePerson(item.name, managerName));
+        managerName = manager?.manager || "";
+        depth += 1;
+      }
+    });
+    return rows;
   });
 }
 
@@ -1837,6 +1954,11 @@ function workflowStepForOwner(owner) {
   if (normalized.includes("GERENCIA") || normalized.includes("GERENTE")) return "Gerência";
   if (normalized.includes("DIRETOR")) return "Diretoria";
   if (normalized === "RH" || normalized.includes("RECURSOS HUMANOS")) return "RH";
+  const personProfile = profileForPersonName(owner);
+  if (personProfile === "Supervisor") return "Supervisor";
+  if (personProfile === "Gerente") return "Gerência";
+  if (personProfile === "Diretoria") return "Diretoria";
+  if (personProfile === "RH") return "RH";
   return owner || "Supervisor";
 }
 
@@ -1882,7 +2004,8 @@ function immediateLeaderName() {
   const employee = currentEmployeeRecord();
   if (currentUser.profile === "Colaborador") return employee?.manager && employee.manager !== "Sem líder" ? employee.manager : "Supervisor direto";
   if (currentUser.profile === "Supervisor") return directManagerForLeader(currentUser.name) || "Diretoria";
-  if (currentUser.profile === "Gerente") return "Diretoria";
+  if (currentUser.profile === "Gerente") return directManagerForLeader(currentUser.name) || "Diretoria";
+  if (currentUser.profile === "RH") return employee?.manager && employee.manager !== "Sem líder" ? employee.manager : "Diretoria";
   return "RH";
 }
 
@@ -1953,7 +2076,8 @@ function saveRequestWorkflow(request, patch) {
 }
 
 function canAccessPage(pageId, profile = currentUser.profile) {
-  if (["requestForm", "employeeDetail", "employeeForm"].includes(pageId)) return true;
+  if (pageId === "employeeForm") return ["RH", "Diretoria"].includes(profile);
+  if (["requestForm", "employeeDetail"].includes(pageId)) return true;
   if (pageId === "paystubs") return true;
   return pages.some((group) => group.items.some(([id, , , profiles]) => id === pageId && (!profiles || profiles.includes(profile))));
 }
@@ -2071,6 +2195,20 @@ function employeeStatus(employee) {
   return employee?.status || "Ativo";
 }
 
+function cleanEmail(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function isValidEmailAddress(value) {
+  const email = cleanEmail(value);
+  return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email);
+}
+
+function employeeEmailForDelivery(employee) {
+  const email = cleanEmail(employee?.email || "");
+  return isValidEmailAddress(email) ? email : "";
+}
+
 function formatDate(value) {
   if (!value) return "Sem data";
   const parts = String(value).slice(0, 10).split("-");
@@ -2096,7 +2234,19 @@ function formatDateRange(start, end) {
 }
 
 function dateInputValue(value) {
-  return value ? String(value).slice(0, 10) : "";
+  if (!value) return "";
+  const raw = String(value).trim();
+  const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) {
+    const year = Number(iso[1]);
+    return year >= 1900 && year <= 2100 ? `${iso[1]}-${iso[2]}-${iso[3]}` : "";
+  }
+  const br = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (br) {
+    const year = Number(br[3]);
+    return year >= 1900 && year <= 2100 ? `${br[3]}-${br[2]}-${br[1]}` : "";
+  }
+  return "";
 }
 
 function dateIsWithinRange(start, end, reference = new Date().toISOString().slice(0, 10)) {
@@ -2158,9 +2308,13 @@ async function loadSupabaseDataFresh() {
     vacationRows = [];
     registrationCards = [];
     paystubRecords = [];
+    employeeDocumentRecords = [];
     employeeTimelineEvents = [];
     emailReviewEvents = [];
     emailTemplateRows = [];
+    monthlyRoutineRows = [];
+    accountingPackageRows = [];
+    announcementRows = [];
     applySimulationHierarchy();
     state.dataStatus = "Supabase indisponível";
     renderPage();
@@ -2170,12 +2324,13 @@ async function loadSupabaseDataFresh() {
   try {
     const previousSignature = runtimeDataSignature;
     const wasAlreadyConnected = state.dataStatus.startsWith("Supabase conectado");
-    const [employeeResult, requestResult, vacationResult, documentResult, employeeDocumentResult, timelineResult, emailReviewResult, emailTemplateResult] = await Promise.all([
+    const [employeeResult, employeeEmailResult, profileResult, requestResult, vacationResult, documentResult, employeeDocumentResult, timelineResult, emailReviewResult, emailTemplateResult, routineResult, accountingResult, announcementResult] = await Promise.all([
       supabaseClient.from("hr_employee_directory").select("*").order("full_name"),
+      supabaseClient.from("hr_employees").select("id,email"),
+      supabaseClient.from("hr_profiles").select("employee_id,role_code,is_active"),
       supabaseClient
         .from("hr_requests")
         .select("id,protocol_number,status,title,description,due_at,created_at,raw_data,request_type:hr_request_types(name),employee:hr_employees!hr_requests_employee_id_fkey(full_name),company:hr_companies(name)")
-        .not("status", "in", "(completed,cancelled,rejected)")
         .order("created_at", { ascending: false }),
       supabaseClient
         .from("hr_vacation_periods")
@@ -2187,9 +2342,8 @@ async function loadSupabaseDataFresh() {
       supabaseClient
         .from("hr_employee_documents")
         .select(
-          "id,original_file_name,storage_bucket,storage_path,competence_month,sensitivity,created_at,employee:hr_employees(employee_code,full_name,company:hr_companies(code,name),department:hr_departments(name),position:hr_positions(name)),document_type:hr_document_types(code,name,category)",
+          "id,title,description,original_file_name,file_name,file_url,drive_file_id,storage_bucket,storage_path,competence_month,sensitivity,status,validation_status,metadata,raw_metadata,created_at,employee_id,employee:hr_employees(employee_code,full_name,company:hr_companies(code,name),department:hr_departments(name),position:hr_positions(name)),document_type:hr_document_types(code,name,category)",
         )
-        .eq("document_type.code", "paystub")
         .order("competence_month", { ascending: false }),
       supabaseClient
         .from("hr_employee_timeline")
@@ -2206,9 +2360,24 @@ async function loadSupabaseDataFresh() {
         .from("email_templates")
         .select("template_key,module_name,recipient_type,subject_template,body_template,body_html_template,delivery_channel,audience_scope,requires_review,is_active")
         .eq("app_name", "recursos_humanos"),
+      supabaseClient
+        .from("hr_monthly_routines")
+        .select("id,company_id,competence_month,routine_key,routine_name,status,source_mode,original_file_name,processed_by,processed_at,raw_result,category,title,description,due_date,notes,created_at,updated_at")
+        .order("updated_at", { ascending: false })
+        .limit(800),
+      supabaseClient
+        .from("hr_accounting_packages")
+        .select("id,company_id,competence_month,status,checklist,summary,sent_to_accounting_at,sent_by,notes,created_at,updated_at")
+        .order("updated_at", { ascending: false })
+        .limit(240),
+      supabaseClient
+        .from("hr_announcements")
+        .select("id,company_id,department_id,target_employee_id,template_key,delivery_channel,title,body,payload,status,published_at,expires_at,created_by,created_at,updated_at")
+        .order("created_at", { ascending: false })
+        .limit(300),
     ]);
 
-    const errors = [employeeResult.error, requestResult.error, vacationResult.error, documentResult.error, employeeDocumentResult.error, timelineResult.error, emailReviewResult.error, emailTemplateResult.error].filter(Boolean);
+    const errors = [employeeResult.error, requestResult.error, vacationResult.error, documentResult.error, employeeDocumentResult.error, timelineResult.error, emailReviewResult.error, emailTemplateResult.error, routineResult.error, accountingResult.error, announcementResult.error].filter(Boolean);
     if (errors.length) {
       employees = [];
       requests = [];
@@ -2217,16 +2386,26 @@ async function loadSupabaseDataFresh() {
       vacationRows = [];
       registrationCards = [];
       paystubRecords = [];
+      employeeDocumentRecords = [];
       employeeTimelineEvents = [];
       emailReviewEvents = [];
       emailTemplateRows = [];
+      monthlyRoutineRows = [];
+      accountingPackageRows = [];
+      announcementRows = [];
       applySimulationHierarchy();
       state.dataStatus = `Supabase conectado, aguardando ajuste de base: ${errors[0].message}`;
       renderPage();
       return;
     }
 
-    employees = (employeeResult.data || []).map((row) => ({
+    if (profileResult.error) console.warn("Perfis não carregados para hierarquia visual:", profileResult.error.message);
+    if (employeeEmailResult.error) console.warn("E-mails de colaboradores não carregados:", employeeEmailResult.error.message);
+    const profileByEmployeeId = new Map((profileResult.data || []).map((profile) => [profile.employee_id, profile]));
+    const emailByEmployeeId = new Map((employeeEmailResult.data || []).map((employee) => [employee.id, employee.email || ""]));
+    employees = (employeeResult.data || []).map((row) => {
+      const profile = profileByEmployeeId.get(row.id) || {};
+      return {
       id: row.employee_code || row.id,
       dbId: row.id,
       name: row.full_name,
@@ -2235,14 +2414,18 @@ async function loadSupabaseDataFresh() {
       role: row.position_name || "Sem cargo",
       manager: row.manager_name || "Sem líder",
       managerEmployeeId: row.manager_employee_id || "",
+      supervisorEmployeeId: row.supervisor_employee_id || "",
+      leadershipLevel: row.leadership_level || "",
+      roleCode: profile.role_code || row.role_code || "",
       status: mapEmployeeStatus(row.status),
       admission: formatDate(row.admission_date),
       cpf: row.cpf || row.document_number || row.tax_id || row.raw_import?.cpf || "",
       birthDate: row.birth_date || row.date_of_birth || row.raw_import?.birth_date || "",
-      email: row.email || row.corporate_email || row.personal_email || "",
+      email: emailByEmployeeId.get(row.id) || row.email || "",
       vacation: "Consultar",
       timeBank: "Consultar",
-    }));
+      };
+    });
     applySimulationHierarchy();
 
     requests = (requestResult.data || []).map((row) => {
@@ -2284,21 +2467,47 @@ async function loadSupabaseDataFresh() {
     ]);
 
     registrationCards = [];
-    paystubRecords = (employeeDocumentResult.data || [])
-      .filter((row) => row.document_type?.code === "paystub")
+    employeeDocumentRecords = (employeeDocumentResult.data || []).map((row) => ({
+      id: row.id,
+      employee_id: row.employee_id || "",
+      employee_code: row.employee?.employee_code || "",
+      employee_name: row.employee?.full_name || "Sem colaborador",
+      company_name: row.employee?.company?.name || row.employee?.company?.code || "Sem empresa",
+      department: row.employee?.department?.name || "Sem setor",
+      position: row.employee?.position?.name || "Sem cargo",
+      title: row.title || row.document_type?.name || row.file_name || row.original_file_name || "Documento",
+      type: row.document_type?.name || row.title || "Documento",
+      type_code: row.document_type?.code || "",
+      category: row.document_type?.category || "",
+      description: row.description || "",
+      competence: row.competence_month || "",
+      competence_label: row.competence_month ? formatPaystubCompetence(row.competence_month) : "Sem competência",
+      sensitivity: row.sensitivity || "internal",
+      status: row.status || row.validation_status || (row.storage_path || row.file_url ? "Disponível" : "Registrado"),
+      validation_status: row.validation_status || "",
+      file_name: row.file_name || row.original_file_name || "",
+      file_url: row.file_url || (row.storage_path ? supabaseStoragePublicUrl(row.storage_bucket, row.storage_path) : ""),
+      storage_bucket: row.storage_bucket || "",
+      storage_path: row.storage_path || "",
+      drive_file_id: row.drive_file_id || "",
+      metadata: row.metadata || row.raw_metadata || {},
+      created_at: row.created_at || "",
+    }));
+    paystubRecords = employeeDocumentRecords
+      .filter((row) => row.type_code === "paystub")
       .map((row) => ({
         id: row.id,
-        employee_code: row.employee?.employee_code || "",
-        employee_name: row.employee?.full_name || "Sem colaborador",
-        company_name: row.employee?.company?.name || row.employee?.company?.code || "Sem empresa",
-        department: row.employee?.department?.name || "Sem setor",
-        position: row.employee?.position?.name || "Sem cargo",
-        competence: row.competence_month || "",
-        competence_label: row.competence_month ? formatPaystubCompetence(row.competence_month) : "Sem competência",
-        type: row.document_type?.name || "Contracheque",
-        status: row.storage_path ? "Disponível" : "Registrado",
-        file_name: row.original_file_name || "",
-        file_url: row.storage_path ? supabaseStoragePublicUrl(row.storage_bucket, row.storage_path) : "",
+        employee_code: row.employee_code || "",
+        employee_name: row.employee_name || "Sem colaborador",
+        company_name: row.company_name || "Sem empresa",
+        department: row.department || "Sem setor",
+        position: row.position || "Sem cargo",
+        competence: row.competence || "",
+        competence_label: row.competence_label || "Sem competência",
+        type: row.type || "Contracheque",
+        status: row.status || "Registrado",
+        file_name: row.file_name || "",
+        file_url: row.file_url || "",
       }));
     employeeTimelineEvents = (timelineResult.data || []).map((row) => ({
       id: row.id,
@@ -2346,6 +2555,61 @@ async function loadSupabaseDataFresh() {
       requires_review: Boolean(row.requires_review),
       is_active: row.is_active !== false,
     }));
+    monthlyRoutineRows = (routineResult.data || []).map((row) => ({
+      id: row.id,
+      company_id: row.company_id || "",
+      company: companyKeyFromId(row.company_id),
+      competence_month: row.competence_month || "",
+      competence: monthKeyFromDate(row.competence_month),
+      routine_key: row.routine_key || "",
+      routine_name: row.routine_name || row.title || row.routine_key || "",
+      status: row.status || "",
+      source_mode: row.source_mode || "",
+      original_file_name: row.original_file_name || "",
+      processed_by: row.processed_by || "",
+      processed_at: row.processed_at || "",
+      raw_result: row.raw_result || {},
+      category: row.category || row.raw_result?.category || "",
+      title: row.title || "",
+      description: row.description || "",
+      due_date: row.due_date || "",
+      notes: row.notes || "",
+      created_at: row.created_at || "",
+      updated_at: row.updated_at || "",
+    }));
+    accountingPackageRows = (accountingResult.data || []).map((row) => ({
+      id: row.id,
+      company_id: row.company_id || "",
+      company: companyKeyFromId(row.company_id),
+      competence: monthKeyFromDate(row.competence_month),
+      competence_month: row.competence_month || "",
+      status: row.status || "",
+      checklist: row.checklist || {},
+      summary: row.summary || {},
+      sent_to_accounting_at: row.sent_to_accounting_at || "",
+      sent_by: row.sent_by || "",
+      notes: row.notes || "",
+      created_at: row.created_at || "",
+      updated_at: row.updated_at || "",
+    }));
+    announcementRows = (announcementResult.data || []).map((row) => ({
+      id: row.id,
+      company_id: row.company_id || "",
+      company: companyKeyFromId(row.company_id),
+      department_id: row.department_id || "",
+      target_employee_id: row.target_employee_id || "",
+      template_key: row.template_key || "",
+      delivery_channel: row.delivery_channel || "app",
+      title: row.title || "",
+      body: row.body || "",
+      payload: row.payload || {},
+      status: row.status || "",
+      published_at: row.published_at || "",
+      expires_at: row.expires_at || "",
+      created_by: row.created_by || "",
+      created_at: row.created_at || "",
+      updated_at: row.updated_at || "",
+    }));
     state.vacationMessage = vacationForecasts.length ? "" : "Nenhuma previsão de férias cadastrada no Supabase.";
     applySimulationHierarchy();
     rebuildRuntimeIndexes();
@@ -2364,9 +2628,13 @@ async function loadSupabaseDataFresh() {
     vacationRows = [];
     registrationCards = [];
     paystubRecords = [];
+    employeeDocumentRecords = [];
     employeeTimelineEvents = [];
     emailReviewEvents = [];
     emailTemplateRows = [];
+    monthlyRoutineRows = [];
+    accountingPackageRows = [];
+    announcementRows = [];
     applySimulationHierarchy();
     state.dataStatus = `Erro de conexão: ${error.message}`;
     renderPage();
@@ -2390,6 +2658,8 @@ function mapRequestStatus(status) {
     in_execution: "Em execução",
     completed: "Concluído",
     rejected: "Reprovado",
+    cancelled: "Cancelado",
+    archived: "Arquivado",
     waiting_documents: "Aguardando esclarecimento",
     waiting_information: "Aguardando esclarecimento",
   };
@@ -2643,7 +2913,7 @@ function employeesPage() {
     ${state.formMessage ? `<div class="notice form-notice"><strong>Retorno</strong><p>${state.formMessage}</p></div>` : ""}
     <div class="card table-wrap">
       <table>
-        <thead><tr><th>Colaborador</th><th>Empresa</th><th>Setor</th><th>Cargo</th><th>Líder</th><th>Férias</th><th>Banco</th><th>Status</th><th>Ação</th></tr></thead>
+        <thead><tr><th>Colaborador</th><th>Empresa</th><th>Setor</th><th>Cargo</th><th>E-mail</th><th>Líder</th><th>Férias</th><th>Banco</th><th>Status</th><th>Ação</th></tr></thead>
         <tbody>
           ${
             filtered.length
@@ -2689,6 +2959,13 @@ function employeesPage() {
                 <td>
                   ${
                     isEditing
+                      ? `<input class="employee-cell-input employee-email-input" type="email" data-employee-field="${e.id}:email" value="${escapeHtml(e.email || "")}" placeholder="sem e-mail" />`
+                      : escapeHtml(e.email || "sem e-mail")
+                  }
+                </td>
+                <td>
+                  ${
+                    isEditing
                       ? `<select class="select employee-cell-input employee-leader-select" data-employee-field="${e.id}:leader">
                           <option value="">Sem líder</option>
                           ${leaderOptions}
@@ -2720,7 +2997,7 @@ function employeesPage() {
               </tr>`;
                   })
                   .join("")
-              : `<tr><td colspan="9"><div class="empty small-empty">Nenhum colaborador ${statusFilter === "Todos" ? "" : statusFilter.toLowerCase()} encontrado neste filtro.</div></td></tr>`
+              : `<tr><td colspan="10"><div class="empty small-empty">Nenhum colaborador ${statusFilter === "Todos" ? "" : statusFilter.toLowerCase()} encontrado neste filtro.</div></td></tr>`
           }
         </tbody>
       </table>
@@ -2743,6 +3020,7 @@ function employeeDetailPage() {
     ["ficha", "Ficha"],
     ["documentos", "Documentos"],
     ["historico", "Histórico"],
+    ["controles", "Controles RH"],
     ["admissao", "Admissão"],
     ["ferias", "Férias"],
     ["ponto", "Ponto"],
@@ -2785,6 +3063,7 @@ function employeeDetailTab(employee) {
     ficha: () => employeeFicha(employee),
     documentos: () => employeeDocuments(employee),
     historico: () => employeeHistory(employee),
+    controles: () => employeeControls(employee),
     admissao: () => employeeAdmission(employee),
     ferias: () => employeeVacation(employee),
     ponto: () => employeeTime(employee),
@@ -2824,22 +3103,124 @@ function employeeFicha(employee) {
     </div>`;
 }
 
-function employeeDocuments() {
-  const docRows = [
-    ["Solicitação de admissão", "Concluído", "Restrito RH"],
-    ["ASO - Atestado de Saúde Ocupacional", "Apto", "Restrito jurídico"],
-    ["Contrato de trabalho assinado", "Concluído", "Restrito jurídico"],
-    ["Contracheque / holerite", "Disponível", "Privado do colaborador"],
+function employeeDocumentRows(employee) {
+  return employeeDocumentRecords
+    .filter((record) => record.employee_id === employee.dbId || isSamePerson(record.employee_name, employee.name))
+    .sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")));
+}
+
+function employeeDocuments(employee) {
+  const rows = employeeDocumentRows(employee);
+  return `
+    <div class="card pad">
+      <div class="section-title"><div><h2>Documentos do colaborador</h2><p>Arquivos vinculados ao cadastro, controles do RH e rotinas mensais</p></div>${statusPill(rows.length)}</div>
+      <form id="employee-document-form" class="employee-document-form" data-employee-document-form="${escapeHtml(employee.dbId || employee.id)}">
+        <label class="form-field"><span>Tipo</span><input name="title" placeholder="Ex.: ASO, contrato, documento pessoal" required /></label>
+        <label class="form-field"><span>Descrição</span><input name="description" placeholder="Observação opcional" /></label>
+        <label class="form-field"><span>Arquivo</span>${filePickerMarkup('<input type="file" name="file" required />', "Selecionar arquivo")}</label>
+        <button class="btn primary" type="submit">Anexar documento</button>
+      </form>
+      <div class="doc-list">
+        ${
+          rows.length
+            ? rows
+                .map(
+                  (doc) => `<div class="doc"><div><strong>${escapeHtml(doc.title || doc.type)}</strong><span>${escapeHtml([doc.file_name, doc.description, doc.created_at ? formatDateTime(doc.created_at) : ""].filter(Boolean).join(" · "))}</span></div>${statusPill(doc.status || doc.validation_status || "Registrado")}</div>`,
+                )
+                .join("")
+            : `<div class="empty">Nenhum documento vinculado ainda. Anexe acima ou lance pelo Controles RH.</div>`
+        }
+      </div>
+    </div>`;
+}
+
+function employeeControls(employee) {
+  const controlRows = [
+    ["aso", "ASO", "Registrar/renovar exame ocupacional"],
+    ["medical", "Atestado", "Lançar atestado ou afastamento"],
+    ["training", "Treinamento", "Registrar certificado, reciclagem ou pendência"],
+    ["equipment", "EPI / Equipamento", "Registrar entrega, troca ou devolução"],
+    ["experience", "Contrato de experiência", "Controlar 45/90 dias e parecer"],
+    ["benefits", "Benefícios", "Registrar adesão, alteração ou cancelamento"],
+    ["communications", "Comunicados", "Enviar comunicado individual ou registrar ciência"],
+    ["timeline", "Linha do tempo", "Consultar histórico consolidado"],
   ];
   return `
     <div class="card pad">
-      <div class="section-title"><div><h2>Documentos do fluxo</h2><p>Arquivos vinculados ao cadastro do colaborador</p></div></div>
-      <div class="doc-list">
-        ${docRows
-          .map(([name, status, access]) => `<div class="doc"><div><strong>${name}</strong><span>${access}</span></div>${statusPill(status)}</div>`)
+      <div class="section-title"><div><h2>Controles RH do colaborador</h2><p>Abra o módulo já filtrado para ${escapeHtml(employee.name)}.</p></div>${statusPill("Operacional")}</div>
+      <div class="employee-control-grid">
+        ${controlRows
+          .map(
+            ([moduleKey, title, detail]) => `<button type="button" class="status-card employee-control-action" data-detail-control-module="${moduleKey}" data-detail-control-employee="${escapeHtml(employee.dbId || employee.id)}">
+              <strong>${escapeHtml(title)}</strong><span>${escapeHtml(detail)}</span><em>Abrir</em>
+            </button>`,
+          )
           .join("")}
       </div>
-    </div>`;
+    </div>
+    ${employeeHistory(employee)}
+  `;
+}
+
+async function saveEmployeeDocumentFromForm(form) {
+  const employeeId = form.dataset.employeeDocumentForm;
+  const employee = employees.find((item) => item.dbId === employeeId || item.id === employeeId);
+  if (!employee?.dbId || !supabaseClient) {
+    state.formMessage = "Não foi possível anexar: colaborador sem vínculo no Supabase.";
+    renderPage();
+    return;
+  }
+  const data = new FormData(form);
+  const file = data.get("file");
+  const title = String(data.get("title") || "Documento").trim();
+  const description = String(data.get("description") || "").trim();
+  const fileName = file?.name || "";
+  if (!fileName) {
+    state.formMessage = "Selecione um arquivo para anexar.";
+    renderPage();
+    return;
+  }
+  const storagePath = `ficha-colaborador/${employee.dbId}/${Date.now()}-${fileName}`.replace(/\s+/g, "_");
+  const { data: inserted, error } = await supabaseClient
+    .from("hr_employee_documents")
+    .insert({
+      employee_id: employee.dbId,
+      title,
+      description,
+      document_type: normalizeLoginUsername(title) || "documento",
+      file_name: fileName,
+      file_size_bytes: file.size || null,
+      mime_type: file.type || null,
+      sensitivity: "employee_private",
+      storage_bucket: "hr-employee-documents",
+      storage_path: storagePath,
+      status: "active",
+      validation_status: "pending",
+      raw_metadata: { source: "ficha_colaborador", file_name: fileName },
+      metadata: { source: "ficha_colaborador", actor_name: currentUser.name },
+      uploaded_by: state.authProfile?.id || null,
+    })
+    .select("id")
+    .single();
+  if (error) {
+    state.formMessage = `Documento não anexado: ${error.message}`;
+    renderPage();
+    return;
+  }
+  await recordEmployeeTimeline({
+    employeeId: employee.dbId,
+    eventType: "documento",
+    moduleName: "documentos",
+    title: `Documento adicionado: ${title}`,
+    description: fileName,
+    status: "adicionado",
+    relatedTable: "hr_employee_documents",
+    relatedRecordId: inserted?.id || null,
+    metadata: { file_name: fileName, description },
+  });
+  state.formMessage = `Documento anexado para ${employee.name}.`;
+  await loadSupabaseData();
+  renderPage();
 }
 
 function employeeAdmission() {
@@ -3037,8 +3418,9 @@ function employeeFormPage() {
       <label class="form-field"><span>Empresa</span><select name="company"><option>Prodelar</option><option>Colmob</option><option>Servimec</option></select></label>
       <label class="form-field"><span>Setor</span><input name="department" required placeholder="Ex.: Administrativo" /></label>
       <label class="form-field"><span>Cargo</span><input name="role" required placeholder="Ex.: Auxiliar Administrativo" /></label>
+      <label class="form-field"><span>E-mail para comunicações</span><input name="email" type="email" placeholder="Ex.: nome@empresa.com.br" /></label>
       <label class="form-field"><span>Líder</span><input name="manager" placeholder="Ex.: Diretoria" /></label>
-      <label class="form-field"><span>Data de admissão</span><input name="admission" type="date" required /></label>
+      <label class="form-field"><span>Data de admissão</span>${dateMaskInput("admission", "", "required")}</label>
       <label class="form-field full"><span>Observações</span><textarea name="notes" rows="4" placeholder="Contexto da contratação, pendências ou origem do cadastro"></textarea></label>
       <div class="form-actions full">
         <button type="button" class="btn" data-page="employees">Cancelar</button>
@@ -3122,7 +3504,7 @@ function requestFormPage() {
       <label class="form-field ${isEmployee ? "hidden-field" : ""}"><span>Próximo fluxo padrão</span><input readonly id="approval-route" value="${approvalRouteFor(requestTypes[0]?.[0] || "Solicitação")}" /></label>
       <label class="form-field full"><span>Título</span><input name="title" required placeholder="${formCopy.titlePlaceholder}" /></label>
       <label class="form-field full"><span>Descrição</span><textarea name="description" rows="5" required placeholder="${formCopy.descriptionPlaceholder}"></textarea></label>
-      <label class="form-field full"><span>Anexo opcional</span><input name="attachment" type="file" /></label>
+      <label class="form-field full"><span>Anexo opcional</span>${filePickerMarkup('<input name="attachment" type="file" />', "Selecionar arquivo opcional", "request-file-picker")}</label>
       <div class="form-actions full">
         <button type="button" class="btn" data-page="${state.requestReturnPage || "requests"}">Cancelar</button>
         <button class="btn primary" type="submit">Abrir solicitação</button>
@@ -3137,10 +3519,16 @@ function requestsPage() {
   const scopedRequests = broadCompanyAccess
     ? indexedByCompany(dataIndex.requestsByCompany, activeCompany, visibleScopedRequests)
     : visibleScopedRequests;
-  const scopedRequestKeys = new Set(scopedRequests.map(requestKey));
+  const scopedActiveRequests = scopedRequests.filter((request) => !isTerminalRequestStatus(request.status));
+  const scopedHistoryRequests = scopedRequests
+    .filter((request) => isTerminalRequestStatus(request.status))
+    .sort((a, b) => String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || "")))
+    .slice(0, 60);
+  const visibleActiveRequests = visibleScopedRequests.filter((request) => !isTerminalRequestStatus(request.status));
+  const scopedRequestKeys = new Set(scopedActiveRequests.map(requestKey));
   const companyCounts = {
-    Todas: visibleScopedRequests.length,
-    ...Object.fromEntries(companies.map((company) => [company.key, indexedByCompany(dataIndex.requestsByCompany, company.key, visibleScopedRequests).length])),
+    Todas: visibleActiveRequests.length,
+    ...Object.fromEntries(companies.map((company) => [company.key, indexedByCompany(dataIndex.requestsByCompany, company.key, visibleActiveRequests).length])),
   };
   return `
     ${state.formMessage ? `<div class="notice form-notice"><strong>Retorno</strong><p>${state.formMessage}</p></div>` : ""}
@@ -3156,7 +3544,7 @@ function requestsPage() {
         <div class="lane lane-${lane.toLowerCase().replace(/\s+/g, "-").normalize("NFD").replace(/[\u0300-\u036f]/g, "")}">
           <h3>${lane}</h3>
           <small>${requestLaneHints[lane]}</small>
-          ${(dataIndex.requestsByStatus.get(normalizeText(lane)) || scopedRequests.filter((request) => request.status === lane))
+          ${(dataIndex.requestsByStatus.get(normalizeText(lane)) || scopedActiveRequests.filter((request) => request.status === lane))
             .filter((request) => scopedRequestKeys.has(requestKey(request)))
             .map(
               (request) => `
@@ -3165,12 +3553,12 @@ function requestsPage() {
                 <span>${request.type} · ${request.employee}</span>
                 <p>${request.title}</p>
                 <div class="ticket-meta"><span>Com: ${request.owner}</span><span>Próximo: ${request.next || "Diretoria"}</span></div>
-                <div class="request-flow-mini">
-                  ${["Sup.", "Ger.", "Dir.", "RH"].map((step, index) => {
-                    const full = ["Supervisor", "Gerência", "Diretoria", "RH"][index];
-                    return `<span class="${request.owner === full ? "active" : ""}" title="${full}">${step}</span>`;
-                  }).join("")}
-                </div>
+	                <div class="request-flow-mini">
+	                  ${["Sup.", "Ger.", "Dir.", "RH"].map((step, index) => {
+	                    const full = ["Supervisor", "Gerência", "Diretoria", "RH"][index];
+	                    return `<span class="${workflowStepForOwner(request.owner) === full ? "active" : ""}" title="${full}">${step}</span>`;
+	                  }).join("")}
+	                </div>
                 ${statusPill(request.sla)}
                 ${requestActions(request)}
               </div>`,
@@ -3179,7 +3567,34 @@ function requestsPage() {
         </div>`,
         )
         .join("")}
-    </div>`;
+    </div>
+    ${requestHistoryPanel(scopedHistoryRequests)}`;
+}
+
+function requestHistoryPanel(rows) {
+  return `<div class="card table-wrap request-history-panel" style="margin-top:16px">
+    <div class="section-title compact-title">
+      <div><h2>Histórico de solicitações encerradas</h2><p>Concluídas, reprovadas, canceladas ou arquivadas saem do Kanban e ficam aqui para consulta.</p></div>
+      ${statusPill(`${rows.length}`)}
+    </div>
+    <table>
+      <thead><tr><th>Protocolo</th><th>Tipo</th><th>Colaborador</th><th>Status final</th><th>Última movimentação</th><th>Responsável</th></tr></thead>
+      <tbody>
+        ${
+          rows.length
+            ? rows.map((request) => `<tr>
+                <td><strong>${escapeHtml(request.protocol || "")}</strong></td>
+                <td>${escapeHtml(request.type || "")}</td>
+                <td>${escapeHtml(request.employee || "")}</td>
+                <td>${statusPill(request.status || "Encerrado")}</td>
+                <td>${formatDateTime(request.updatedAt || request.createdAt || new Date().toISOString())}</td>
+                <td>${escapeHtml(request.owner || request.next || "Arquivo")}</td>
+              </tr>`).join("")
+            : `<tr><td colspan="6"><div class="empty">Nenhuma solicitação encerrada neste filtro.</div></td></tr>`
+        }
+      </tbody>
+    </table>
+  </div>`;
 }
 
 function requestActions(request) {
@@ -3220,34 +3635,55 @@ function requestInvolvesUserWithTeam(request, teamNames) {
   return teamNames.has(normalizeText(request.employee));
 }
 
+function requestEmployeeRecord(request) {
+  return employees.find((employee) => isSamePerson(employee.name, request.employee)) || null;
+}
+
+function requestBelongsToCurrentLeadershipTree(request) {
+  if (isSamePerson(request.employee, currentUser.name)) return true;
+  const teamNames = new Set(teamEmployeesForCurrentUser().map((employee) => normalizeText(employee.name)));
+  return teamNames.has(normalizeText(request.employee));
+}
+
+function isDirectorSpecificAuthorization(request) {
+  const type = normalizeText(request.type);
+  return type.includes("ADMISSAO") || type.includes("DEMISSAO") || type.includes("DESLIGAMENTO");
+}
+
+function ownerMatchesCurrentActor(request) {
+  if (isLeaderNameMatch(request.owner, currentUser.name)) return true;
+  const ownerStep = workflowStepForOwner(request.owner);
+  if (currentUser.profile === "RH") return ownerStep === "RH";
+  if (currentUser.profile === "Diretoria") return ownerStep === "Diretoria" && (requestBelongsToCurrentLeadershipTree(request) || isDirectorSpecificAuthorization(request));
+  if (currentUser.profile === "Gerente") return ownerStep === "Gerência" && requestBelongsToCurrentLeadershipTree(request);
+  if (currentUser.profile === "Supervisor") return ownerStep === "Supervisor" && requestBelongsToCurrentLeadershipTree(request);
+  return isSamePerson(request.owner, currentUser.name);
+}
+
 function canActOnRequest(request) {
   if (["Concluído", "Reprovado"].includes(request.status)) return false;
   if (request.status === "Aguardando esclarecimento") {
-    return isSamePerson(request.owner, currentUser.name) || currentUser.profile === "RH";
+    return ownerMatchesCurrentActor(request) || (currentUser.profile === "RH" && workflowStepForOwner(request.owner) === "RH");
   }
   if (request.status === "Em execução") {
     return currentUser.profile === "RH" && (request.owner === "RH" || isLeaderNameMatch(request.owner, currentUser.name));
   }
   if (currentUser.profile === "RH") return request.owner === "RH" || request.status === "Em execução";
-  const ownerStep = workflowStepForOwner(request.owner);
-  if (currentUser.profile === "Diretoria") return ownerStep === "Diretoria" || isSamePerson(request.owner, currentUser.name);
-  if (currentUser.profile === "Gerente") return ownerStep === "Gerência" || isLeaderNameMatch(request.owner, currentUser.name);
-  if (currentUser.profile === "Supervisor") return ownerStep === "Supervisor" || isLeaderNameMatch(request.owner, currentUser.name);
-  return isSamePerson(request.owner, currentUser.name);
+  return ownerMatchesCurrentActor(request);
 }
 
 function visibleRequests() {
   return memoValue(`visible-requests:${currentUser.profile}:${normalizeText(currentUser.name)}:${requests.length}`, () => {
     if (currentUser.profile === "RH") return requests;
     if (currentUser.profile === "Diretoria") {
-      return requests.filter((request) => request.owner === "Diretoria" || request.status === "Aguardando aprovação" || requestInvolvesCurrentUser(request));
+      return requests.filter((request) => requestBelongsToCurrentLeadershipTree(request) || isDirectorSpecificAuthorization(request) || isLeaderNameMatch(request.owner, currentUser.name));
     }
     const teamNames = new Set(teamEmployeesForCurrentUser().map((employee) => normalizeText(employee.name)));
     if (currentUser.profile === "Gerente") {
-      return requests.filter((request) => request.owner === "Gerência" || isLeaderNameMatch(request.owner, currentUser.name) || requestInvolvesUserWithTeam(request, teamNames));
+      return requests.filter((request) => isLeaderNameMatch(request.owner, currentUser.name) || requestInvolvesUserWithTeam(request, teamNames));
     }
     if (currentUser.profile === "Supervisor") {
-      return requests.filter((request) => request.owner === "Supervisor" || isLeaderNameMatch(request.owner, currentUser.name) || requestInvolvesUserWithTeam(request, teamNames));
+      return requests.filter((request) => isLeaderNameMatch(request.owner, currentUser.name) || requestInvolvesUserWithTeam(request, teamNames));
     }
     return requests.filter((request) => isSamePerson(request.employee, currentUser.name) || request.protocol.includes("LOCAL"));
   });
@@ -3361,8 +3797,8 @@ function vacationsPage() {
                 <td><strong>${row.legal_limit_label || formatDate(row.legal_limit_date)}</strong></td>
                 <td>
                   <div class="vacation-edit ${employeeView ? "readonly-edit" : ""}">
-                    <input type="date" data-vacation-start="${key}" value="${dateInputValue(row.planned_start)}" max="${limit}" ${employeeView ? "disabled" : ""} />
-                    <input type="date" data-vacation-end="${key}" value="${dateInputValue(row.planned_end)}" max="${limit}" ${employeeView ? "disabled" : ""} />
+                    ${dateMaskInput("", row.planned_start, `data-vacation-start="${key}" data-date-limit="${limit}" ${employeeView ? "disabled" : ""}`)}
+                    ${dateMaskInput("", row.planned_end, `data-vacation-end="${key}" data-date-limit="${limit}" ${employeeView ? "disabled" : ""}`)}
                   </div>
                   ${employeeView ? "" : `<small>${plannedEndInvalid ? "Data final ultrapassa o limite." : "A data final deve respeitar o limite."}</small>`}
                 </td>
@@ -3484,7 +3920,7 @@ function baseVacationsPage() {
                   <td>${companyLogo(row.company_key || row.source_company || "Prodelar")}<br><span class="muted">${row.department || "Sem setor"}</span></td>
                   <td>${row.acquisition_label || formatDateRange(row.acquisition_start, row.acquisition_end)}</td>
                   <td><strong>${row.legal_limit_label || formatDate(row.legal_limit_date)}</strong></td>
-                  <td><div class="vacation-edit"><input type="date" data-vacation-start="${key}" value="${dateInputValue(row.planned_start)}" max="${limit}" /><input type="date" data-vacation-end="${key}" value="${dateInputValue(row.planned_end)}" max="${limit}" /></div></td>
+                  <td><div class="vacation-edit">${dateMaskInput("", row.planned_start, `data-vacation-start="${key}" data-date-limit="${limit}"`)}${dateMaskInput("", row.planned_end, `data-vacation-end="${key}" data-date-limit="${limit}"`)}</div></td>
                   <td>${row.balance_days ?? "-"}</td>
                   <td>${statusPill(row.submitted_for_review ? "Enviado" : isChanged ? "Alterado" : row.planned_start ? "Programado" : "Pendente")}</td>
                   <td><button class="btn small primary" data-vacation-submit="${key}" ${isChanged ? "" : "disabled"}>Enviar</button></td>
@@ -3653,7 +4089,7 @@ function pointFlowNextOwner(profile = currentUser.profile) {
 
 function pointAdjustmentNextOwner() {
   if (currentUser.profile === "Supervisor") return directManagerForLeader(currentUser.name) || "Diretoria";
-  if (currentUser.profile === "Gerente") return "Diretoria";
+  if (currentUser.profile === "Gerente") return directManagerForLeader(currentUser.name) || "Diretoria";
   if (currentUser.profile === "Diretoria") return "RH";
   if (currentUser.profile === "RH") return "Concluído";
   return immediateLeaderName();
@@ -3819,8 +4255,20 @@ function savePointAdjustmentStore(records) {
 function teamPointAdjustmentsForCurrentUser() {
   return pointAdjustmentStore()
     .filter((record) => !["Concluído", "Reprovado"].includes(record.status))
-    .filter((record) => isLeaderNameMatch(record.owner, currentUser.name) || (currentUser.profile === "RH" && record.owner === "RH"))
+    .filter((record) => pointAdjustmentBelongsToCurrentActor(record))
     .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+}
+
+function pointAdjustmentBelongsToCurrentActor(record) {
+  if (isLeaderNameMatch(record.owner, currentUser.name)) return true;
+  if (currentUser.profile === "RH") return workflowStepForOwner(record.owner) === "RH" || record.owner === "RH";
+  const employee = employees.find((item) => isSamePerson(item.name, record.employeeName));
+  const inTree = employee ? teamEmployeesForCurrentUser().some((item) => isSamePerson(item.name, employee.name)) : false;
+  const ownerStep = workflowStepForOwner(record.owner);
+  if (currentUser.profile === "Diretoria") return inTree && ownerStep === "Diretoria";
+  if (currentUser.profile === "Gerente") return inTree && ownerStep === "Gerência";
+  if (currentUser.profile === "Supervisor") return inTree && ownerStep === "Supervisor";
+  return false;
 }
 
 function updatePointAdjustment(id, patch) {
@@ -3857,6 +4305,90 @@ function updatePointAdjustment(id, patch) {
   }
   state.pointMessage = "Ajuste de ponto movimentado.";
   renderPage();
+}
+
+function pointAdjustmentChangeRows(request) {
+  return [
+    ["Entrada", request.entry],
+    ["Saída intervalo", request.intervalOut],
+    ["Retorno intervalo", request.intervalReturn],
+    ["Saída do dia", request.dayOut],
+  ].filter(([, value]) => Boolean(value));
+}
+
+function pointAdjustmentChangeSummary(request) {
+  const rows = pointAdjustmentChangeRows(request);
+  return rows.length ? rows.map(([label, value]) => `${label} ${value}`).join(" · ") : "Sem horário informado";
+}
+
+function renderPointAdjustmentDecisionCard(request) {
+  const expanded = state.pointExpandedAdjustmentId === request.id;
+  const changes = pointAdjustmentChangeRows(request);
+  const nextOwner = pointAdjustmentNextOwner();
+  const requestId = escapeHtml(request.id);
+  return `
+    <article class="point-decision-card ${expanded ? "is-expanded" : ""}" data-point-adjustment-toggle="${requestId}">
+      <div class="point-decision-status" aria-hidden="true">!</div>
+      <div class="point-decision-content">
+        <div class="point-decision-head">
+          <div>
+            <span class="point-decision-protocol">${escapeHtml(request.id)}</span>
+            <h3>${escapeHtml(request.employeeName || "Colaborador")}</h3>
+            <p>${escapeHtml([request.company, request.department].filter(Boolean).join(" · ") || "Sem empresa/setor")}</p>
+          </div>
+          <div class="point-decision-date">
+            <span>Data do ajuste</span>
+            <strong>${formatDate(request.date)}</strong>
+          </div>
+        </div>
+
+        <div class="point-decision-grid">
+          <div class="point-decision-field">
+            <span>Tipo</span>
+            <strong>${escapeHtml(request.reason || "Ajuste de ponto")}</strong>
+          </div>
+          <div class="point-decision-field">
+            <span>Horários solicitados</span>
+            <div class="point-time-chips">
+              ${
+                changes.length
+                  ? changes.map(([label, value]) => `<strong>${escapeHtml(label)} <em>${escapeHtml(value)}</em></strong>`).join("")
+                  : `<strong>Nenhum horário informado</strong>`
+              }
+            </div>
+          </div>
+          <div class="point-decision-field">
+            <span>Alçada atual</span>
+            <strong>${escapeHtml(request.owner || currentUser.name)}</strong>
+          </div>
+        </div>
+
+        <div class="point-decision-note ${expanded ? "is-expanded" : ""}">
+          <span>Observação / justificativa</span>
+          <p>${escapeHtml(request.comment || "Sem observação informada pelo colaborador.")}</p>
+        </div>
+
+        ${
+          expanded
+            ? `<div class="point-decision-details">
+                <div><span>Solicitado em</span><strong>${formatDateTime(request.createdAt)}</strong></div>
+                <div><span>Status</span><strong>${escapeHtml(request.status || "Em análise")}</strong></div>
+                <div><span>Próximo ao aprovar</span><strong>${escapeHtml(nextOwner)}</strong></div>
+                <div><span>Resumo</span><strong>${escapeHtml(pointAdjustmentChangeSummary(request))}</strong></div>
+              </div>`
+            : ""
+        }
+
+        <div class="point-decision-footer">
+          <button class="btn small" type="button" data-point-adjustment-toggle="${requestId}">${expanded ? "Ocultar detalhes" : "Ver completo"}</button>
+          <div class="point-decision-actions">
+            <button class="btn small primary" type="button" data-point-adjustment-approve="${requestId}">Aprovar</button>
+            <button class="btn small danger" type="button" data-point-adjustment-reject="${requestId}">Reprovar</button>
+            <button class="btn small warn" type="button" data-point-adjustment-info="${requestId}">Pedir mais informações</button>
+          </div>
+        </div>
+      </div>
+    </article>`;
 }
 
 function operationalActionStore() {
@@ -3961,9 +4493,100 @@ function formatDateInputValue(value) {
 }
 
 function normalizeDateInputValue(value) {
-  const digits = String(value || "").replace(/\D/g, "");
-  if (digits.length !== 8) return value;
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  const digits = raw.replace(/\D/g, "");
+  if (digits.length !== 8) return raw;
   return `${digits.slice(4, 8)}-${digits.slice(2, 4)}-${digits.slice(0, 2)}`;
+}
+
+function dateTextInputValue(value) {
+  const raw = String(value || "").trim();
+  const isoMatch = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (isoMatch) return `${isoMatch[3]}/${isoMatch[2]}/${isoMatch[1]}`;
+  return formatDateInputValue(raw);
+}
+
+function hasCompleteDateInput(value) {
+  return String(value || "").replace(/\D/g, "").length === 8;
+}
+
+function dateMaskInput(name, value = "", extra = "") {
+  return `<input class="date-mask" name="${name}" type="text" inputmode="numeric" maxlength="10" placeholder="dd/mm/aaaa" autocomplete="off" value="${escapeHtml(dateTextInputValue(value))}" ${extra} />`;
+}
+
+function formatFileSize(bytes = 0) {
+  const size = Number(bytes) || 0;
+  if (!size) return "";
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${Math.round(size / 102.4) / 10} KB`;
+  return `${Math.round(size / 1024 / 102.4) / 10} MB`;
+}
+
+function fileSelectionText(input) {
+  const files = Array.from(input?.files || []);
+  if (!files.length) return "Nenhum arquivo selecionado";
+  if (files.length === 1) {
+    const file = files[0];
+    return `${file.name}${file.size ? ` · ${formatFileSize(file.size)}` : ""}`;
+  }
+  const names = files.slice(0, 3).map((file) => file.name).join(", ");
+  return `${files.length} arquivos selecionados: ${names}${files.length > 3 ? "..." : ""}`;
+}
+
+function filePickerMarkup(inputHtml, label = "Selecionar arquivo ou arrastar aqui", extraClass = "") {
+  return `<span class="routine-file-picker pending ${extraClass}">
+    ${inputHtml}
+    <span class="file-picker-label">${label}</span>
+    <span class="file-picker-preview" data-file-preview>Nenhum arquivo selecionado</span>
+  </span>`;
+}
+
+function updateFileSelectionPreview(input) {
+  const files = Array.from(input?.files || []);
+  const picker = input.closest(".routine-file-picker") || input.closest(".file-upload-control");
+  let preview = picker?.querySelector("[data-file-preview]") || input.parentElement?.querySelector("[data-file-preview]");
+  if (!preview) {
+    preview = document.createElement("span");
+    preview.className = "file-picker-preview";
+    preview.dataset.filePreview = "";
+    if (picker) picker.appendChild(preview);
+    else input.insertAdjacentElement("afterend", preview);
+  }
+  if (!files.length) {
+    const currentText = String(preview.textContent || "").trim();
+    if (!picker?.classList.contains("done") || !currentText || currentText === "Nenhum arquivo selecionado") {
+      preview.textContent = "Nenhum arquivo selecionado";
+    }
+    preview.classList.remove("selected");
+    picker?.classList.remove("file-selected");
+    return;
+  }
+  preview.textContent = fileSelectionText(input);
+  preview.classList.add("selected");
+  picker?.classList.add("file-selected");
+  picker?.classList.remove("pending");
+  picker?.classList.add("done");
+}
+
+function bindFileSelectionPreviews(scope = document) {
+  scope.querySelectorAll('input[type="file"]').forEach((input) => {
+    if (input.dataset.filePreviewBound) return;
+    input.dataset.filePreviewBound = "true";
+    updateFileSelectionPreview(input);
+    input.addEventListener("change", () => updateFileSelectionPreview(input));
+  });
+}
+
+function bindDateMasks(scope = document) {
+  scope.querySelectorAll(".date-mask").forEach((input) => {
+    if (input.dataset.dateMaskBound) return;
+    input.dataset.dateMaskBound = "true";
+    input.addEventListener("input", (event) => {
+      event.target.value = formatDateInputValue(event.target.value);
+    });
+  });
 }
 
 function selfPointApprovalFlow() {
@@ -4079,25 +4702,10 @@ function timePage() {
     </div>
     <div class="card pad" style="margin-top:16px">
         <div class="section-title"><div><h2>Fila de ponto</h2><p>${pointQueueHelp}</p></div>${statusPill(pointQueueCount)}</div>
-        <div class="checklist">
+        <div class="point-decision-list">
           ${
             directPointAdjustments
-              .map((request) => {
-                const changes = [
-                  request.entry ? `Entrada ${request.entry}` : "",
-                  request.intervalOut ? `Saída intervalo ${request.intervalOut}` : "",
-                  request.intervalReturn ? `Retorno intervalo ${request.intervalReturn}` : "",
-                  request.dayOut ? `Saída do dia ${request.dayOut}` : "",
-                ].filter(Boolean).join(" · ") || "Sem horário informado";
-                return `<div class="check blocked"><span class="box">!</span><div><strong>${request.id} · ${request.employeeName}</strong><br><span>${formatDate(request.date)} · ${request.reason} · ${changes}</span>${request.comment ? `<br><span>${request.comment}</span>` : ""}
-                  <div class="ticket-actions">
-                    <button class="btn small primary" data-point-adjustment-approve="${request.id}">Aprovar</button>
-                    <button class="btn small danger" data-point-adjustment-reject="${request.id}">Reprovar</button>
-                    <button class="btn small warn" data-point-adjustment-info="${request.id}">Pedir mais informações</button>
-                    <span class="muted">Próximo: ${pointAdjustmentNextOwner()}</span>
-                  </div>
-                </div></div>`;
-              })
+              .map((request) => renderPointAdjustmentDecisionCard(request))
               .join("") ||
             actionablePointRequests
               .map((request) => `<div class="check blocked"><span class="box">!</span><div><strong>${request.protocol} · ${request.title}</strong><br><span>${request.employee} · ${request.status}</span>${
@@ -4144,11 +4752,100 @@ function timePage() {
     </div>`;
 }
 
+function portalRoutineCards() {
+  if (!["RH", "Diretoria"].includes(currentUser.profile) && !isImpersonationAdmin()) return "";
+  const company = state.company && state.company !== "Todas" ? state.company : currentUser.company || "Todas";
+  const routines = monthlyRhRoutines();
+  const routineStatus = rhRoutineStatusStore();
+  const targetCompanies = routineCompanyKeys(company);
+  const doneCount = routines.filter((routine) =>
+    targetCompanies.every((targetCompany) => routineStatus[rhRoutineKey(targetCompany, routine.key, routineCompetence())]?.done),
+  ).length;
+  const temporaryOpen = temporaryRhRoutines().length;
+  return `
+    <div class="card pad"><div class="section-title"><div><h2>Rotinas mensais</h2><p>Importações, conferências e pacotes da competência</p></div></div><strong class="portal-card-number">${doneCount} de ${routines.length}</strong><button class="btn" data-page="rhRoutines">Abrir rotinas</button></div>
+    <div class="card pad"><div class="section-title"><div><h2>Rotinas temporárias</h2><p>Tarefas abertas a partir de admissões, desligamentos e pendências</p></div></div><strong class="portal-card-number">${temporaryOpen} abertas</strong><button class="btn" data-page="rhRoutines">Abrir tarefas</button></div>`;
+}
+
+function currentUserCommunicationRows() {
+  const employee = currentEmployeeRecord() || currentUser;
+  const employeeId = employee?.dbId || employee?.id || state.authProfile?.employee_id || "";
+  const email = normalizeText(employee?.email || currentUser.email || state.authProfile?.email || "");
+  const employeeName = employee?.name || currentUser.name;
+  const employeeCompany = employee?.company || currentUser.company || "";
+  const now = new Date();
+  const appRows = announcementRows
+    .filter((row) => {
+      const status = normalizeText(row.status || "published");
+      if (["cancelled", "cancelado", "draft", "rascunho", "inactive", "inativo"].includes(status)) return false;
+      if (row.published_at && new Date(row.published_at) > now) return false;
+      if (row.expires_at && new Date(row.expires_at) < now) return false;
+      const channel = normalizeText(row.delivery_channel || "app");
+      if (channel && !channel.includes("APP") && !channel.includes("BOTH") && !channel.includes("AMBOS")) return false;
+      const targetEmployee = row.target_employee_id && employeeId && row.target_employee_id === employeeId;
+      const companyMatch = !row.company || row.company === "Todas" || normalizeText(row.company) === normalizeText(employeeCompany);
+      const groupMessage = !row.target_employee_id && companyMatch;
+      return targetEmployee || groupMessage;
+    })
+    .map((row) => ({
+      id: `app-${row.id}`,
+      source: "App",
+      date: row.published_at || row.created_at || row.updated_at || "",
+      title: row.title || communicationTemplateFriendlyName(emailTemplateFor(row.template_key)) || "Comunicado do RH",
+      body: row.body || row.payload?.mensagem || row.payload?.observacao || "",
+      status: row.status || "Publicado",
+      channel: row.delivery_channel || "app",
+    }));
+  const emailRows = emailReviewEvents
+    .filter((event) => event.status === "sent")
+    .filter((event) => {
+      if (employeeId && event.employee_id === employeeId) return true;
+      if (email && normalizeText(event.recipient_email) === email) return true;
+      return isSamePerson(event.recipient_name, employeeName) || isSamePerson(event.employee_name, employeeName);
+    })
+    .map((event) => {
+      const preview = emailReviewPreview(event);
+      return {
+        id: `email-${event.id}`,
+        source: "E-mail",
+        date: event.sent_at || event.created_at || "",
+        title: preview.subject || event.subject || communicationTemplateFriendlyName(emailTemplateFor(event.template_key)),
+        body: preview.bodyText || event.payload?.mensagem || event.payload?.observacao || event.event_type || "",
+        status: "Enviado",
+        channel: "email",
+      };
+    });
+  return [...appRows, ...emailRows]
+    .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")))
+    .slice(0, 30);
+}
+
+function portalCommunicationsPanel() {
+  const rows = currentUserCommunicationRows();
+  return `<div class="card pad" style="margin-top:16px">
+    <div class="section-title"><div><h2>Minhas comunicações</h2><p>Histórico de comunicados recebidos pelo app e por e-mail.</p></div>${statusPill(`${rows.length}`)}</div>
+    <div class="timeline portal-communication-timeline">
+      ${
+        rows.length
+          ? rows.map((row) => `<div class="event portal-communication-event">
+              <time>${row.date ? formatDate(row.date) : "Sem data"}</time>
+              <div>
+                <strong>${escapeHtml(row.title || "Comunicado do RH")}</strong>
+                <span>${escapeHtml(row.body || "Sem mensagem adicional.")}</span>
+                <small>${escapeHtml(row.source)} · ${escapeHtml(row.status || "Recebido")}</small>
+              </div>
+            </div>`).join("")
+          : `<div class="empty">Nenhum comunicado recebido ainda para este usuário.</div>`
+      }
+    </div>
+  </div>`;
+}
+
 function portalPage() {
   const employeeName = currentUser.name;
   const employeeCompany = currentUser.company;
   const employeeDepartment = currentUser.department;
-  const openOwnRequests = requests.filter((request) => isSamePerson(request.employee, currentUser.name) && !["Concluído", "Reprovado"].includes(request.status)).length;
+  const openOwnRequests = requests.filter((request) => isSamePerson(request.employee, currentUser.name) && !isTerminalRequestStatus(request.status)).length;
   return `
     <div class="profile card pad">
       <div><div class="avatar">${employeeName.split(" ").slice(0, 2).map((part) => part[0]).join("")}</div></div>
@@ -4167,14 +4864,9 @@ function portalPage() {
       <div class="card pad"><div class="section-title"><div><h2>Meu ponto</h2><p>Solicitar ajuste e acompanhar histórico</p></div></div><button class="btn" data-action="open-self-time">Abrir ajuste no ponto</button></div>
       <div class="card pad"><div class="section-title"><div><h2>Meus contracheques</h2><p>Consulta por mês e ano com anexo para baixar</p></div></div><button class="btn" data-action="open-self-paystubs">Abrir contracheques</button></div>
       <div class="card pad"><div class="section-title"><div><h2>Minhas férias</h2><p>Consulta baseada na base geral de férias</p></div></div><button class="btn" data-action="open-self-vacations">Abrir férias</button></div>
+      ${portalRoutineCards()}
     </div>
-    <div class="card pad" style="margin-top:16px">
-      <div class="section-title"><div><h2>Comunicados do RH</h2><p>Informativos periódicos para colaboradores</p></div>${statusPill("Informativo")}</div>
-      <div class="timeline">
-        <div class="event"><time>Hoje</time><div><strong>Atualização de documentos</strong><span>Confira seus dados cadastrais e mantenha telefone e endereço atualizados.</span></div></div>
-        <div class="event"><time>Maio/2026</time><div><strong>Previsão de férias importada</strong><span>A base mensal foi atualizada. Consulte seus períodos em Minhas férias.</span></div></div>
-      </div>
-    </div>`;
+    ${portalCommunicationsPanel()}`;
 }
 
 function accountingCompetence() {
@@ -4218,6 +4910,19 @@ function accountingPackageKey(company, competence, itemKey) {
 
 function accountingPackageStatus(company = accountingCompany(), competence = accountingCompetence()) {
   const store = accountingPackageStore();
+  monthlyRoutineRows
+    .filter((row) => row.company === company && row.competence === competence && (row.category === "pacote_mensal" || row.routine_key.startsWith("pacote_mensal_")))
+    .forEach((row) => {
+      const itemKey = row.routine_key.replace(/^pacote_mensal_/, "");
+      store[accountingPackageKey(company, competence, itemKey)] = {
+        done: ["processed", "completed", "enviado"].includes(String(row.status || "").toLowerCase()) || row.raw_result?.done !== false,
+        fileName: row.original_file_name || row.raw_result?.file_name || row.raw_result?.fileName || row.routine_name,
+        at: row.processed_at || row.updated_at || row.created_at,
+        by: row.raw_result?.by || "Supabase",
+        drivePath: row.raw_result?.drive_path || accountingDrivePath(company, competence),
+        dbId: row.id,
+      };
+    });
   const items = accountingPackageItems();
   const rows = items.map((item) => ({
     ...item,
@@ -4283,6 +4988,40 @@ async function persistAccountingPackageItem(company, competence, item, status) {
   if (execution.error) console.error("Erro ao registrar execução do pacote mensal", execution.error);
 }
 
+async function persistAccountingPackageSummary(company, competence, summary, status = "in_review") {
+  if (!supabaseClient) return;
+  const companyId = routineCompanyId(company);
+  if (!companyId) return;
+  const checklist = Object.fromEntries(summary.rows.map((item) => [
+    item.key,
+    {
+      title: item.title,
+      required: item.required,
+      done: Boolean(item.status?.done),
+      file_name: item.status?.fileName || "",
+      drive_path: item.status?.drivePath || accountingDrivePath(company, competence),
+      at: item.status?.at || "",
+    },
+  ]));
+  const { error } = await supabaseClient.from("hr_accounting_packages").upsert({
+    company_id: companyId,
+    competence_month: `${competence}-01`,
+    status,
+    checklist,
+    summary: {
+      uploaded: summary.uploaded,
+      total: summary.total,
+      required_done: summary.requiredDone,
+      required_total: summary.requiredTotal,
+      drive_path: accountingDrivePath(company, competence),
+    },
+    sent_to_accounting_at: status === "sent" ? new Date().toISOString() : null,
+    sent_by: status === "sent" ? state.authProfile?.id || null : null,
+    notes: `Atualizado por ${currentUser.name}`,
+  }, { onConflict: "company_id,competence_month" });
+  if (error) console.error("Erro ao persistir resumo do pacote mensal", error);
+}
+
 function setAccountingPackageFile(company, competence, itemKey, file) {
   const item = accountingPackageItems().find((row) => row.key === itemKey);
   if (!item || !file) return;
@@ -4297,6 +5036,7 @@ function setAccountingPackageFile(company, competence, itemKey, file) {
   store[accountingPackageKey(company, competence, item.key)] = status;
   saveAccountingPackageStore(store);
   void persistAccountingPackageItem(company, competence, item, status);
+  void persistAccountingPackageSummary(company, competence, accountingPackageStatus(company, competence), "in_review");
   state.accountingMessage = `${item.title} anexado para ${company} · ${routineCompetenceLabel(competence)}.`;
 }
 
@@ -4351,6 +5091,7 @@ async function sendAccountingPackage() {
     files: `${summary.uploaded}/${summary.total}`,
   });
   saveAccountingPackageHistoryStore(history);
+  void persistAccountingPackageSummary(company, competence, summary, "sent");
   state.accountingMessage = `Pacote mensal de ${company} · ${routineCompetenceLabel(competence)} enviado para contabilidade.`;
   renderPage();
 }
@@ -4378,19 +5119,32 @@ function accountingPage() {
       ${metric("Status de envio", summary.ready ? "Pronto" : "Pendente", summary.ready ? "Obrigatórios completos" : `${summary.requiredDone}/${summary.requiredTotal} obrigatórios`, "☑")}
       ${metric("Empresa", company, routineCompetenceLabel(competence), "▦")}
     </div>
-    <section class="routine-column accounting-package-panel">
-      <div class="routine-column-title"><div><h2>Lista de arquivos do pacote</h2><p>Destino Drive: ${escapeHtml(accountingDrivePath(company, competence))}</p></div>${statusPill(`${summary.uploaded}/${summary.total}`)}</div>
-      <div class="routine-card-list">
-        ${summary.rows.map((item) => `<div class="routine-tile ${item.status?.done ? "done" : "pending"}">
-          <div class="routine-tile-head"><strong>${escapeHtml(item.title)}</strong>${statusPill(item.status?.done ? "Enviado" : item.required ? "Pendente" : "Opcional")}</div>
-          <span>${item.status?.fileName ? escapeHtml(item.status.fileName) : "Selecione o arquivo para salvar a referência no banco."}</span>
-          <label class="routine-file-picker ${item.status?.done ? "done" : "pending"}">
-            <input type="file" data-accounting-upload="${item.key}" data-accounting-company="${company}" data-accounting-competence-value="${competence}" />
-            Selecionar arquivo
-          </label>
-        </div>`).join("")}
+    <section class="card table-wrap accounting-package-panel">
+      <div class="section-title table-title">
+        <div><h2>Lista de arquivos do pacote</h2><p>Destino Drive: ${escapeHtml(accountingDrivePath(company, competence))}</p></div>
+        <div class="table-actions">
+          ${statusPill(`${summary.uploaded}/${summary.total}`)}
+          <button class="btn primary" data-accounting-send ${summary.ready ? "" : "disabled"}>Enviar para contabilidade</button>
+        </div>
       </div>
-      <button class="btn primary" data-accounting-send ${summary.ready ? "" : "disabled"}>Enviar para contabilidade</button>
+      <table class="accounting-package-table">
+        <thead><tr><th>Arquivo</th><th>Status</th><th>Referência</th><th>Atualização</th><th>Ação</th></tr></thead>
+        <tbody>
+          ${summary.rows.map((item) => `<tr class="${item.status?.done ? "routine-row-done" : "routine-row-pending"}">
+            <td><strong>${escapeHtml(item.title)}</strong><br><span>${item.required ? "Obrigatório" : "Opcional"}</span></td>
+            <td>${statusPill(item.status?.done ? "Enviado" : item.required ? "Pendente" : "Opcional")}</td>
+            <td>${item.status?.fileName ? escapeHtml(item.status.fileName) : "Nenhum arquivo selecionado"}</td>
+            <td>${item.status?.at ? formatDateTime(item.status.at) : "Sem atualização"}</td>
+            <td>
+              <label class="btn small ${item.status?.done ? "" : "primary"} accounting-upload-button file-upload-control">
+                <input type="file" data-accounting-upload="${item.key}" data-accounting-company="${company}" data-accounting-competence-value="${competence}" />
+                ${item.status?.done ? "Substituir" : "Incluir"}
+                <span class="file-picker-preview" data-file-preview>Nenhum arquivo selecionado</span>
+              </label>
+            </td>
+          </tr>`).join("")}
+        </tbody>
+      </table>
     </section>
     <div class="card pad routine-history-panel" style="margin-top:16px">
       <div class="section-title">
@@ -4411,7 +5165,7 @@ function accountingPage() {
 
 function rhRoutinesPage() {
   const routines = monthlyRhRoutines();
-  const directorMode = currentUser.profile === "Diretoria";
+  const directorMode = !canManageRhOperations();
   const activeCompany = state.company || "Todas";
   const routineStatus = rhRoutineStatusStore();
   const competence = routineCompetence();
@@ -4476,7 +5230,23 @@ function monthlyRhRoutines() {
 }
 
 function rhRoutineStatusStore() {
-  return JSON.parse(localStorage.getItem("rhRoutineStatus") || "{}");
+  const store = safeJsonParse(localStorage.getItem("rhRoutineStatus"), {});
+  monthlyRoutineRows.forEach((row) => {
+    if (!row.company || !row.routine_key || !row.competence) return;
+    const raw = row.raw_result || {};
+    const done = raw.done === true || ["processed", "completed", "done", "enviado", "fechado"].includes(String(row.status || "").toLowerCase());
+    store[rhRoutineKey(row.company, row.routine_key, row.competence)] = {
+      done,
+      fileName: row.original_file_name || raw.file_name || raw.fileName || row.routine_name || "Executado no Supabase",
+      source: row.source_mode || raw.source || "supabase",
+      category: row.category || raw.category || "",
+      competence: row.competence,
+      by: raw.by || "Supabase",
+      at: row.processed_at || row.updated_at || row.created_at,
+      dbId: row.id,
+    };
+  });
+  return store;
 }
 
 function saveRhRoutineStatusStore(store) {
@@ -4525,7 +5295,7 @@ function saveRhTask(form) {
     company: String(data.get("company") || state.company || "Todas"),
     type: String(data.get("type") || "general"),
     priority: String(data.get("priority") || "normal"),
-    dueDate: String(data.get("dueDate") || ""),
+    dueDate: normalizeDateInputValue(data.get("dueDate")),
     description: String(data.get("description") || "").trim(),
     status: "pending",
     createdBy: currentUser.name,
@@ -4555,7 +5325,7 @@ function updateRhTask(form, taskId) {
           company: String(data.get("company") || task.company || "Todas"),
           type: String(data.get("type") || task.type || "general"),
           priority: String(data.get("priority") || task.priority || "normal"),
-          dueDate: String(data.get("dueDate") || ""),
+          dueDate: normalizeDateInputValue(data.get("dueDate")),
           description: String(data.get("description") || "").trim(),
           updatedBy: currentUser.name,
           updatedAt: new Date().toISOString(),
@@ -4596,7 +5366,7 @@ function rhTasksPanel(tasks, directorMode) {
       <label class="form-field"><span>Empresa</span><select name="company" ${directorMode ? "disabled" : ""}>${companyOptions.map((company) => `<option ${state.company === company ? "selected" : ""}>${company}</option>`).join("")}</select></label>
       <label class="form-field"><span>Tipo</span><select name="type" ${directorMode ? "disabled" : ""}><option value="medical_certificate">Atestado</option><option value="experience_contract">Contrato de experiência</option><option value="document">Documento</option><option value="payroll">Folha</option><option value="general">Outros controles</option></select></label>
       <label class="form-field"><span>Prioridade</span><select name="priority" ${directorMode ? "disabled" : ""}><option value="normal">Normal</option><option value="high">Alta</option><option value="critical">Crítica</option><option value="low">Baixa</option></select></label>
-      <label class="form-field"><span>Prazo</span><input name="dueDate" type="date" ${directorMode ? "disabled" : ""} /></label>
+      <label class="form-field"><span>Prazo</span>${dateMaskInput("dueDate", "", directorMode ? "disabled" : "")}</label>
       <label class="form-field full"><span>Observação</span><textarea name="description" rows="2" placeholder="Contexto, responsável ou documento relacionado" ${directorMode ? "disabled" : ""}></textarea></label>
       <div class="form-actions full"><button class="btn primary" type="submit" ${directorMode ? "disabled" : ""}>Criar tarefa</button></div>
     </form>
@@ -4617,7 +5387,7 @@ function rhTaskItem(task, directorMode, companyOptions, typeOptions) {
       <label><span>Empresa</span><select name="company" ${directorMode ? "disabled" : ""}>${companyOptions.map((company) => `<option ${task.company === company ? "selected" : ""}>${company}</option>`).join("")}</select></label>
       <label><span>Tipo</span><select name="type" ${directorMode ? "disabled" : ""}>${typeOptions.filter(([value]) => value !== "all").map(([value, label]) => `<option value="${value}" ${task.type === value ? "selected" : ""}>${label}</option>`).join("")}</select></label>
       <label><span>Prioridade</span><select name="priority" ${directorMode ? "disabled" : ""}>${["low", "normal", "high", "critical"].map((priority) => `<option value="${priority}" ${task.priority === priority ? "selected" : ""}>${priority}</option>`).join("")}</select></label>
-      <label><span>Prazo</span><input name="dueDate" type="date" value="${escapeHtml(task.dueDate || "")}" ${directorMode ? "disabled" : ""} /></label>
+      <label><span>Prazo</span>${dateMaskInput("dueDate", task.dueDate || "", directorMode ? "disabled" : "")}</label>
       <label class="full"><span>Observação</span><textarea name="description" rows="2" ${directorMode ? "disabled" : ""}>${escapeHtml(task.description || "")}</textarea></label>
       <div class="task-actions full">
         <button class="btn small primary" type="submit" ${directorMode ? "disabled" : ""}>Salvar</button>
@@ -4699,7 +5469,7 @@ function companyRoutineChecklist(routines, routineStatus, activeCompany, directo
               <td>
                 ${
                   routine.hasFile && !directorMode
-                    ? `<label class="routine-file-picker ${status?.done ? "done" : "pending"}" data-routine-drop="${routine.key}" data-routine-company="${activeCompany}"><input type="file" data-routine-upload="${routine.key}" data-routine-company="${activeCompany}" />Selecionar arquivo ou arrastar aqui</label>`
+                    ? `<label class="routine-file-picker ${status?.done ? "done" : "pending"}" data-routine-drop="${routine.key}" data-routine-company="${activeCompany}"><input type="file" data-routine-upload="${routine.key}" data-routine-company="${activeCompany}" /><span class="file-picker-label">Selecionar arquivo ou arrastar aqui</span><span class="file-picker-preview" data-file-preview>${status?.fileName ? escapeHtml(status.fileName) : "Nenhum arquivo selecionado"}</span></label>`
                     : `<button class="btn small" data-routine-mark="${routine.key}" data-routine-company="${activeCompany}" ${directorMode ? "disabled" : ""}>Marcar concluído</button>`
                 }
               </td>
@@ -4894,6 +5664,10 @@ function routineDoneForCompany(companyKey, routineKey, competence = routineCompe
   return Boolean(rhRoutineStatusStore()[rhRoutineKey(companyKey, routineKey, competence)]?.done);
 }
 
+function routineStatusForCompany(companyKey, routineKey, competence = routineCompetence()) {
+  return rhRoutineStatusStore()[rhRoutineKey(companyKey, routineKey, competence)] || null;
+}
+
 function routineCategoryStats(category, activeCompany = state.company || "Todas", competence = routineCompetence()) {
   const keys = routineCompanyKeys(activeCompany);
   const items = routineCategoryItems(category);
@@ -4903,7 +5677,27 @@ function routineCategoryStats(category, activeCompany = state.company || "Todas"
 }
 
 function routineTemporaryStore() {
-  return safeJsonParse(localStorage.getItem("rhTemporaryRoutines"), []);
+  const localRows = safeJsonParse(localStorage.getItem("rhTemporaryRoutines"), []);
+  const fromDb = monthlyRoutineRows
+    .filter((row) => row.category === "temporary" || row.routine_key.startsWith("temporary::"))
+    .map((row) => ({
+      id: row.routine_key.replace(/^temporary::/, "") || row.id,
+      dbId: row.id,
+      title: row.routine_name || row.title || "Rotina temporária",
+      description: row.description || row.notes || row.raw_result?.description || "",
+      dueDate: row.due_date || row.raw_result?.dueDate || "",
+      company: row.company || "Prodelar",
+      owner: row.raw_result?.owner || row.raw_result?.by || "RH",
+      competence: row.competence,
+      status: ["processed", "completed", "done"].includes(String(row.status || "").toLowerCase()) || row.raw_result?.done ? "done" : "pending",
+      createdBy: row.raw_result?.createdBy || "Supabase",
+      createdAt: row.created_at,
+      completedAt: row.processed_at || row.raw_result?.completedAt || "",
+      completedBy: row.raw_result?.completedBy || "",
+      closedCompetence: row.raw_result?.closedCompetence || "",
+    }));
+  const seen = new Set(fromDb.map((row) => row.id));
+  return [...fromDb, ...localRows.filter((row) => !seen.has(row.id))];
 }
 
 function saveRoutineTemporaryStore(rows) {
@@ -4972,11 +5766,10 @@ rhRoutinesPage = function rhRoutinesPage() {
       ${routineMonthlyColumn(activeCompany, directorMode, competence)}
       ${routineTemporaryColumn(activeCompany, directorMode)}
     </div>
-    ${
-      canCloseMonth
-        ? `<div class="routine-close-month"><button class="btn primary" data-routine-close-month>Fechar mês ${escapeHtml(competenceLabel)}</button></div>`
-        : `<div class="notice muted-notice routine-close-hint"><strong>Fechamento bloqueado</strong><p>O botão de fechar mês aparece quando importações, rotinas mensais e temporárias estiverem verdes.</p></div>`
-    }
+    <div class="routine-close-month">
+      <button class="btn primary" data-routine-close-month ${canCloseMonth && !directorMode ? "" : "disabled"}>Fechar mês ${escapeHtml(competenceLabel)}</button>
+      ${canCloseMonth ? "" : `<span class="muted">Complete importações, rotinas mensais e temporárias para fechar.</span>`}
+    </div>
     ${routineHistoryPanel(rhRoutineStatusStore(), monthlyRhRoutines(), activeCompany, competence)}
     ${state.rhTemporaryModalOpen ? temporaryRoutineModal(activeCompany) : ""}`;
 };
@@ -4997,12 +5790,15 @@ function routineImportItem(item, companyKeys, directorMode, competence) {
   const doneCount = companyKeys.filter((companyKey) => routineDoneForCompany(companyKey, item.key, competence)).length;
   const done = doneCount === companyKeys.length;
   const activeCompany = companyKeys.length === 1 ? companyKeys[0] : "Todas";
+  const selectedStatus = companyKeys.map((companyKey) => routineStatusForCompany(companyKey, item.key, competence)).find((status) => status?.fileName);
+  const fileLabel = selectedStatus?.fileName || (done ? "Arquivo importado" : "Nenhum arquivo selecionado");
   return `<div class="routine-tile ${done ? "done" : "pending"}">
     <div class="routine-tile-head"><strong>${escapeHtml(item.title)}</strong>${statusPill(done ? "Importado" : "Pendente")}</div>
     <span>${escapeHtml(item.folder)}</span>
     <label class="routine-file-picker ${done ? "done" : "pending"}" data-routine-drop="${item.key}" data-routine-company="${activeCompany}">
       <input type="file" data-routine-upload="${item.key}" data-routine-company="${activeCompany}" ${directorMode ? "disabled" : ""} />
-      Arrastar arquivo ou selecionar
+      <span class="file-picker-label">Arrastar arquivo ou selecionar</span>
+      <span class="file-picker-preview" data-file-preview>${escapeHtml(fileLabel)}</span>
     </label>
   </div>`;
 }
@@ -5016,7 +5812,7 @@ function routineMonthlyColumn(activeCompany, directorMode, competence) {
     <div class="routine-card-list">
       ${routineCategoryItems("monthly").map((item) => routineMonthlyItem(item, keys, directorMode, competence)).join("")}
     </div>
-    <button class="btn primary" data-routine-execute-monthly ${directorMode || !allDone ? "disabled" : ""}>Executar rotinas mensais</button>
+    <button class="btn primary" data-routine-execute-monthly ${directorMode ? "disabled" : ""}>Executar rotinas mensais</button>
   </section>`;
 }
 
@@ -5026,7 +5822,7 @@ function routineMonthlyItem(item, companyKeys, directorMode, competence) {
   const activeCompany = companyKeys.length === 1 ? companyKeys[0] : "Todas";
   return `<button class="routine-tile button-tile ${done ? "done" : "pending"}" data-routine-mark="${item.key}" data-routine-company="${activeCompany}" ${directorMode ? "disabled" : ""}>
     <div class="routine-tile-head"><strong>${escapeHtml(item.title)}</strong>${statusPill(done ? "Concluído" : "Pendente")}</div>
-    <span>${done ? "Verde nesta competência" : "Clique para marcar verde"}</span>
+    <span>${done ? "Clique para desmarcar se precisar corrigir" : "Clique para marcar verde"}</span>
   </button>`;
 }
 
@@ -5065,7 +5861,7 @@ function temporaryRoutineModal(activeCompany) {
       <div class="form-grid">
         <label class="form-field full"><span>Título</span><input name="title" required placeholder="Ex.: Conferir contrato de experiência" /></label>
         <label class="form-field full"><span>Descrição</span><textarea name="description" rows="3" placeholder="Contexto, documentos ou próximos passos"></textarea></label>
-        <label class="form-field"><span>Prazo</span><input name="dueDate" type="date" /></label>
+        <label class="form-field"><span>Prazo</span>${dateMaskInput("dueDate")}</label>
         <label class="form-field"><span>Empresa</span><select name="company">
           ${["Prodelar", "Colmob", "Servimec"].map((company) => `<option value="${company}" ${activeCompany === company ? "selected" : ""}>${company}</option>`).join("")}
         </select></label>
@@ -5092,6 +5888,7 @@ async function persistRoutineExecution(companyKey, routineKey, routineName, stat
     processed_by: state.authProfile?.id || null,
     processed_at: done ? status.at || new Date().toISOString() : null,
     last_error: status.error || null,
+    category: status.category || "monthly",
     raw_result: {
       done,
       by: status.by || currentUser.name,
@@ -5163,7 +5960,7 @@ function createTemporaryRoutineFromForm(form) {
     id: `temp-${Date.now()}`,
     title: String(data.get("title") || "").trim(),
     description: String(data.get("description") || "").trim(),
-    dueDate: String(data.get("dueDate") || ""),
+    dueDate: normalizeDateInputValue(data.get("dueDate")),
     company: String(data.get("company") || state.company || "Prodelar"),
     owner: String(data.get("owner") || currentUser.name || "RH").trim(),
     competence: routineCompetence(),
@@ -5227,6 +6024,15 @@ function closeRoutineMonth() {
     closedAt: new Date().toISOString(),
   });
   saveRoutineMonthHistoryStore(history);
+  routineCompanyKeys(activeCompany).forEach((companyKey) => {
+    void persistRoutineExecution(companyKey, `month_closed_${competence}`, `Fechamento mensal ${routineCompetenceLabel(competence)}`, {
+      done: true,
+      competence,
+      category: "month_close",
+      fileName: "Competência fechada",
+      closedCompetence: competence,
+    });
+  });
   state.rhRoutineCompetence = shiftMonthKey(competence, 1);
   state.rhRoutineMessage = `Competência ${routineCompetenceLabel(competence)} fechada. Nova competência: ${routineCompetenceLabel(state.rhRoutineCompetence)}.`;
 }
@@ -5282,6 +6088,11 @@ function masterDataPage() {
     "managers",
     scopedEmployees.filter((employee) => simulatedProfileForEmployee(employee) === "Gerente").map((employee) => employee.name).sort(),
   );
+  const directors = editableMasterItems(
+    activeCompany,
+    "directors",
+    scopedEmployees.filter((employee) => simulatedProfileForEmployee(employee) === "Diretoria").map((employee) => employee.name).sort(),
+  );
 
   return `
     <div class="company-switcher dashboard-company-switcher">
@@ -5293,6 +6104,7 @@ function masterDataPage() {
       ${metric("Cargos", roles.length, "Cargo não define permissão sozinho", "◎")}
       ${metric("Supervisores", supervisors.length, "Equipe direta", "◷")}
       ${metric("Gerentes", managers.length, "Equipes dos supervisores", "◇")}
+      ${metric("Diretores", directors.length, "Liderados diretos e aprovações específicas", "◆")}
     </div>
     <div class="card pad" style="margin-top:16px">
       <div class="section-title table-title"><div><h2>Departamentos, cargos e hierarquia</h2><p>Edite a base da empresa selecionada. Colaboradores continuam no cadastro próprio.</p></div>${statusPill(activeCompany)}</div>
@@ -5301,6 +6113,7 @@ function masterDataPage() {
         ${masterDataEditor("Cargos", "roles", roles, activeCompany, "Cargo ajuda na leitura da estrutura, mas permissão vem do vínculo.")}
         ${masterDataEditor("Supervisores", "supervisors", supervisors, activeCompany, "Vê equipe direta, férias e ponto. Não vê documentos nem contracheques.")}
         ${masterDataEditor("Gerentes", "managers", managers, activeCompany, "Vê equipes sob sua gestão e contracheques da estrutura, por decisão da empresa.")}
+        ${masterDataEditor("Diretores", "directors", directors, activeCompany, "Acompanham seus liderados e aprovações específicas, como admissão e demissão.")}
       </div>
     </div>`;
 }
@@ -5412,6 +6225,7 @@ function masterDataTypeHint(type) {
     roles: "Cargo usado para leitura e filtros",
     supervisors: "Líder de equipe direta",
     managers: "Gestor de supervisores ou área",
+    directors: "Diretoria cadastrada no organograma",
   };
   return hints[type] || "Cadastro";
 }
@@ -5422,6 +6236,7 @@ function masterDataNoun(type) {
     roles: "cargo",
     supervisors: "supervisor",
     managers: "gerente",
+    directors: "diretor",
   };
   return nouns[type] || "registro";
 }
@@ -5636,29 +6451,31 @@ function peopleControlScopedEmployees(activeCompany) {
 }
 
 function peopleControlInput(module, [label, type], activeCompany) {
+  const fieldLabel = escapeHtml(label);
   if (type === "employee") {
     const options = peopleControlScopedEmployees(activeCompany).slice(0, 120);
-    return `<label class="field"><span>${label}</span><select data-people-control-employee="${module.key}">
-      ${options.map((employee) => `<option value="${employee.name}">${employee.name} · ${employee.department || "Sem setor"}</option>`).join("")}
+    const selectedEmployee = options.find((employee) => employee.dbId === state.peopleControlEmployeeId || employee.id === state.peopleControlEmployeeId);
+    return `<label class="form-field people-control-field people-control-field-wide"><span>${fieldLabel}</span><select data-people-control-employee="${module.key}">
+      ${options.map((employee) => `<option value="${escapeHtml(employee.name)}" ${selectedEmployee && isSamePerson(selectedEmployee.name, employee.name) ? "selected" : ""}>${escapeHtml(employee.name)} · ${escapeHtml(employee.department || "Sem setor")}</option>`).join("")}
     </select></label>`;
   }
   if (type === "file") {
-    return `<label class="field"><span>${label}</span><span class="routine-file-picker pending"><input type="file" data-people-control-file="${module.key}" />Selecionar arquivo ou arrastar aqui</span></label>`;
+    return `<label class="form-field people-control-field people-control-file-field"><span>${fieldLabel}</span>${filePickerMarkup(`<input type="file" data-people-control-file="${module.key}" />`, "Selecionar arquivo ou arrastar aqui", "people-control-file-picker")}</label>`;
   }
   if (type === "date") {
-    return `<label class="field"><span>${label}</span><input type="date" data-people-control-field="${module.key}:${label}" /></label>`;
+    return `<label class="form-field people-control-field"><span>${fieldLabel}</span>${dateMaskInput("", "", `data-people-control-field="${module.key}:${label}"`)}</label>`;
   }
   if (type === "number") {
-    return `<label class="field"><span>${label}</span><input type="number" min="0" placeholder="0" data-people-control-field="${module.key}:${label}" /></label>`;
+    return `<label class="form-field people-control-field"><span>${fieldLabel}</span><input type="number" min="0" placeholder="0" data-people-control-field="${module.key}:${label}" /></label>`;
   }
   if (type.startsWith("select:")) {
     const options = type.slice(7).split("|");
-    return `<label class="field"><span>${label}</span><select data-people-control-field="${module.key}:${label}">
-      ${options.map((option) => `<option>${option}</option>`).join("")}
+    return `<label class="form-field people-control-field"><span>${fieldLabel}</span><select data-people-control-field="${module.key}:${label}">
+      ${options.map((option) => `<option>${escapeHtml(option)}</option>`).join("")}
     </select></label>`;
   }
   const placeholder = type.startsWith("text:") ? type.slice(5) : "";
-  return `<label class="field"><span>${label}</span><input type="text" placeholder="${placeholder}" data-people-control-field="${module.key}:${label}" /></label>`;
+  return `<label class="form-field people-control-field ${label === "Observação" ? "people-control-field-wide" : ""}"><span>${fieldLabel}</span><input type="text" placeholder="${escapeHtml(placeholder)}" data-people-control-field="${module.key}:${label}" /></label>`;
 }
 
 function peopleControlEventsFor(moduleKey) {
@@ -5708,7 +6525,140 @@ function peopleControlTimelineStatus(eventType) {
   return statuses[eventType] || "registrado";
 }
 
-function savePeopleControlEvent(moduleKey) {
+function peopleControlDateOrToday(value) {
+  return value || new Date().toISOString().slice(0, 10);
+}
+
+function peopleControlNumberOrNull(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function peopleControlDocumentSensitivity(module) {
+  const sensitivity = normalizeText(module?.sensitivity || "");
+  return sensitivity.includes("SENSIVEL") || sensitivity.includes("RESTRITO") ? "hr_restricted" : "employee_private";
+}
+
+async function persistPeopleControlDocument({ employee, module, values, file, entry, summary }) {
+  if (!supabaseClient || !employee?.dbId || !file?.name) return null;
+  const storagePath = `controles-rh/${employee.dbId}/${entry.id}/${file.name}`.replace(/\s+/g, "_");
+  const payload = {
+    employee_id: employee.dbId,
+    title: `${module.title}: ${file.name}`,
+    document_type: module.key,
+    description: summary || module.description || "",
+    file_name: file.name,
+    file_size_bytes: file.size || null,
+    mime_type: file.type || null,
+    sensitivity: peopleControlDocumentSensitivity(module),
+    storage_bucket: "hr-employee-documents",
+    storage_path: storagePath,
+    status: "active",
+    validation_status: "pending",
+    raw_metadata: {
+      source: "controles_rh",
+      module_key: module.key,
+      entry_id: entry.id,
+      values,
+    },
+    metadata: {
+      source: "controles_rh",
+      module_key: module.key,
+      entry_id: entry.id,
+      actor_name: currentUser.name,
+    },
+    uploaded_by: state.authProfile?.id || null,
+  };
+  const { data, error } = await supabaseClient.from("hr_employee_documents").insert(payload).select("id").single();
+  if (error) throw new Error(`Documento não gravado: ${error.message}`);
+  return { table: "hr_employee_documents", id: data?.id || null };
+}
+
+async function persistPeopleControlEvent(module, employee, values, file, entry, summary) {
+  if (!supabaseClient || !employee?.dbId) return { ok: false, message: "Supabase indisponível ou colaborador sem vínculo." };
+  const actorId = state.authProfile?.id || null;
+  try {
+    let related = null;
+    if (module.key === "aso") {
+      const { data, error } = await supabaseClient
+        .from("hr_aso")
+        .insert({
+          employee_id: employee.dbId,
+          tipo: values["Tipo de exame"] || "ASO",
+          data_exame: peopleControlDateOrToday(values["Data do exame"]),
+          data_vencimento: values.Validade || null,
+          resultado: "registrado",
+          observacoes: summary || module.description || "",
+          link_documento: file?.name ? `controles-rh://${entry.id}/${file.name}` : null,
+          status: "registrado",
+          created_by: actorId,
+        })
+        .select("id")
+        .single();
+      if (error) throw new Error(`ASO não gravado: ${error.message}`);
+      related = { table: "hr_aso", id: data?.id || null };
+    } else if (module.key === "medical") {
+      const { data, error } = await supabaseClient
+        .from("hr_atestados")
+        .insert({
+          employee_id: employee.dbId,
+          tipo: values.Tipo || "Atestado médico",
+          data_inicio: peopleControlDateOrToday(values.Início),
+          data_fim: values["Retorno previsto"] || null,
+          dias_afastamento: peopleControlNumberOrNull(values.Dias),
+          observacoes: summary || module.description || "",
+          link_documento: file?.name ? `controles-rh://${entry.id}/${file.name}` : null,
+          status: "registrado",
+          impacta_folha: true,
+          created_by: actorId,
+        })
+        .select("id")
+        .single();
+      if (error) throw new Error(`Atestado não gravado: ${error.message}`);
+      related = { table: "hr_atestados", id: data?.id || null };
+    } else if (module.key === "equipment") {
+      const { data, error } = await supabaseClient
+        .from("hr_epi")
+        .insert({
+          employee_id: employee.dbId,
+          item: values.Item || "Item/EPI",
+          descricao: values.Movimento || "",
+          quantidade: 1,
+          data_entrega: peopleControlDateOrToday(values.Data),
+          motivo: summary || module.description || "",
+          status: values.Movimento || "entregue",
+          link_imagem: file?.name ? `controles-rh://${entry.id}/${file.name}` : null,
+          responsavel_entrega: currentUser.name,
+          created_by: actorId,
+        })
+        .select("id")
+        .single();
+      if (error) throw new Error(`EPI/equipamento não gravado: ${error.message}`);
+      related = { table: "hr_epi", id: data?.id || null };
+    } else if (module.key === "training") {
+      const { data, error } = await supabaseClient
+        .from("hr_training_records")
+        .insert({
+          employee_id: employee.dbId,
+          training_name: values.Treinamento || "Treinamento",
+          provider: values.Obrigatoriedade || "",
+          completed_at: values.Realização || null,
+          expires_at: values.Validade || null,
+        })
+        .select("id")
+        .single();
+      if (error) throw new Error(`Treinamento não gravado: ${error.message}`);
+      related = { table: "hr_training_records", id: data?.id || null };
+    }
+
+    const documentRelated = await persistPeopleControlDocument({ employee, module, values, file, entry, summary });
+    return { ok: true, related: related || documentRelated, documentRelated };
+  } catch (error) {
+    return { ok: false, message: error.message };
+  }
+}
+
+async function savePeopleControlEvent(moduleKey) {
   const module = peopleControlModules.find((item) => item.key === moduleKey) || peopleControlModules[0];
   const employeeSelect = document.querySelector(`[data-people-control-employee="${moduleKey}"]`);
   const employeeName = employeeSelect?.value || currentUser.name;
@@ -5716,10 +6666,11 @@ function savePeopleControlEvent(moduleKey) {
   const values = {};
   document.querySelectorAll(`[data-people-control-field^="${moduleKey}:"]`).forEach((field) => {
     const key = field.dataset.peopleControlField.split(":").slice(1).join(":");
-    values[key] = field.value || "";
+    values[key] = field.classList.contains("date-mask") ? normalizeDateInputValue(field.value) : field.value || "";
   });
   const fileInput = document.querySelector(`[data-people-control-file="${moduleKey}"]`);
-  const fileName = fileInput?.files?.[0]?.name || "";
+  const file = fileInput?.files?.[0] || null;
+  const fileName = file?.name || "";
   const summary = peopleControlEventSummaryFromValues(values, fileName);
   const sensitivity = module.sensitivity.toLowerCase();
   const entry = {
@@ -5736,18 +6687,32 @@ function savePeopleControlEvent(moduleKey) {
     fileName,
     summary,
   };
+  const persisted = await persistPeopleControlEvent(module, employee, values, file, entry, summary);
   savePeopleControlEventStore([entry, ...peopleControlEventStore()]);
   const timelineType = peopleControlTimelineType(moduleKey, values, fileName);
   const timelineTitle = peopleControlTimelineTitle(module, timelineType, values, fileName);
   if (employee?.dbId || employee?.id) {
-    void recordTimeline(employee.dbId || employee.id, timelineType, timelineTitle, summary || module.description || "", peopleControlTimelineStatus(timelineType), {
+    await recordEmployeeTimeline({
+      employeeId: employee.dbId || employee.id,
+      eventType: timelineType,
+      moduleName: moduleKey,
+      title: timelineTitle,
+      description: summary || module.description || "",
+      status: peopleControlTimelineStatus(timelineType),
+      relatedTable: persisted.related?.table || null,
+      relatedRecordId: persisted.related?.id || null,
+      metadata: {
       people_control_id: entry.id,
       module_key: moduleKey,
       file_name: fileName,
       values,
+      persistence_status: persisted.ok ? "supabase" : "timeline_only",
+      persistence_error: persisted.ok ? "" : persisted.message || "",
+      },
     });
   }
-  state.peopleControlMessage = `${module.title} registrado para ${employeeName}. ${summary ? `${summary}. ` : ""}Lançamento salvo na rotina de Controles RH e vinculado à linha do tempo do colaborador.`;
+  state.peopleControlMessage = `${module.title} registrado para ${employeeName}. ${summary ? `${summary}. ` : ""}${persisted.ok ? "Lançamento salvo no Supabase e vinculado à ficha do colaborador." : `Linha do tempo registrada; ajuste pendente na tabela específica: ${persisted.message}`}`;
+  if (persisted.ok) await loadSupabaseData();
   renderPage();
 }
 
@@ -5813,17 +6778,552 @@ function peopleControlHistoryRows(module) {
     .join("");
 }
 
+function admissionCandidateStore() {
+  return safeJsonParse(localStorage.getItem("rhAdmissionCandidates"), []);
+}
+
+function saveAdmissionCandidateStore(rows) {
+  localStorage.setItem("rhAdmissionCandidates", JSON.stringify(rows.slice(0, 300)));
+}
+
+function createAdmissionToken() {
+  const base = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `adm-${Date.now()}-${Math.random()}`;
+  return String(base).replace(/[^a-zA-Z0-9]/g, "").slice(0, 32);
+}
+
+function admissionCandidateByToken(token) {
+  return admissionCandidateStore().find((candidate) => candidate.token === token) || null;
+}
+
+function admissionCandidateLink(token) {
+  const url = new URL(window.location.href);
+  url.search = "";
+  url.searchParams.set("r", APP_VERSION);
+  url.searchParams.set("page", "admissionCandidate");
+  url.searchParams.set("token", token);
+  return url.toString();
+}
+
+function admissionCandidatePublicLink(token) {
+  const url = new URL(PUBLIC_APP_URL);
+  url.searchParams.set("r", APP_VERSION);
+  url.searchParams.set("page", "admissionCandidate");
+  url.searchParams.set("token", token);
+  return url.toString();
+}
+
+function isLocalAppOrigin() {
+  return ["127.0.0.1", "localhost", "::1"].includes(window.location.hostname);
+}
+
+function admissionCandidateShareLink(token) {
+  return isLocalAppOrigin() ? admissionCandidatePublicLink(token) : admissionCandidateLink(token);
+}
+
+function admissionCandidateStatusLabel(status) {
+  const labels = {
+    waiting_candidate: "Aguardando candidato",
+    submitted: "Documentação enviada",
+    converted: "Convertido em colaborador",
+    cancelled: "Cancelado",
+  };
+  return labels[status] || status || "Aguardando candidato";
+}
+
+function admissionCandidateSummary(candidate) {
+  const documents = candidate.documents?.length ? `${candidate.documents.length} anexo(s)` : "Sem anexos";
+  const email = candidate.email || candidate.answers?.email || "sem e-mail";
+  return `${candidate.company || "Empresa"} · ${candidate.department || "Setor"} · ${email} · ${documents}`;
+}
+
+function admissionProcessPanel(directorMode, activeCompany) {
+  const rows = admissionCandidateStore()
+    .filter((candidate) => activeCompany === "Todas" || normalizeText(candidate.company) === normalizeText(activeCompany))
+    .sort((a, b) => String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || "")));
+  const companyOptions = ["Prodelar", "Colmob", "Servimec"];
+  const lastCandidate = state.lastAdmissionCandidateToken ? admissionCandidateByToken(state.lastAdmissionCandidateToken) : null;
+  const lastPublicLink = lastCandidate?.token ? admissionCandidatePublicLink(lastCandidate.token) : "";
+  const lastLocalLink = lastCandidate?.token ? admissionCandidateLink(lastCandidate.token) : "";
+  return `<div class="admission-process">
+    <div class="card pad people-control-subcard">
+      <div class="section-title">
+        <div><h2>Novo processo admissional</h2><p>Cadastre o candidato, gere o link de documentação e só converta em colaborador quando o RH concluir a conferência.</p></div>
+        ${statusPill("Pré-admissão")}
+      </div>
+      <form class="form-grid admission-candidate-form" id="admission-candidate-form">
+        <label class="form-field"><span>Nome do candidato</span><input name="name" required placeholder="Nome completo" ${directorMode ? "disabled" : ""} /></label>
+        <label class="form-field"><span>CPF</span><input name="cpf" placeholder="Somente números ou CPF formatado" ${directorMode ? "disabled" : ""} /></label>
+        <label class="form-field"><span>E-mail</span><input name="email" type="email" placeholder="email@dominio.com" ${directorMode ? "disabled" : ""} /></label>
+        <label class="form-field"><span>Telefone</span><input name="phone" placeholder="(00) 00000-0000" ${directorMode ? "disabled" : ""} /></label>
+        <label class="form-field"><span>Empresa</span><select name="company" ${directorMode ? "disabled" : ""}>${companyOptions.map((company) => `<option ${activeCompany === company ? "selected" : ""}>${company}</option>`).join("")}</select></label>
+        <label class="form-field"><span>Setor previsto</span><input name="department" placeholder="Ex.: PRODUCAO, ADMINISTRATIVO" ${directorMode ? "disabled" : ""} /></label>
+        <label class="form-field"><span>Cargo previsto</span><input name="role" placeholder="Ex.: Auxiliar administrativo" ${directorMode ? "disabled" : ""} /></label>
+        <label class="form-field"><span>Admissão prevista</span>${dateMaskInput("admission", "", directorMode ? "disabled" : "")}</label>
+        <label class="form-field full"><span>Observações do RH</span><textarea name="notes" rows="3" placeholder="Documentos pendentes, salário aprovado, liderança, observações internas." ${directorMode ? "disabled" : ""}></textarea></label>
+        <div class="form-actions full"><button class="btn primary" type="submit" ${directorMode ? "disabled" : ""}>Gerar link do candidato</button></div>
+      </form>
+      ${lastCandidate ? `<div class="admission-link-result">
+        <div>
+          <strong>Link gerado para ${escapeHtml(lastCandidate.name)}</strong>
+          <span>Use o link público para enviar ao candidato. O link local serve só para teste nesta máquina.</span>
+          <a href="${escapeHtml(lastPublicLink)}" target="_blank" rel="noreferrer">${escapeHtml(lastPublicLink)}</a>
+        </div>
+        <div class="row-actions">
+          <button class="btn small primary" type="button" data-admission-candidate-copy-public="${escapeHtml(lastCandidate.token)}">Copiar link público</button>
+          <a class="btn small" href="${escapeHtml(lastLocalLink)}" target="_blank" rel="noreferrer">Abrir local</a>
+        </div>
+      </div>` : ""}
+    </div>
+    <div class="card table-wrap people-control-subcard people-control-table-card" style="margin-top:14px">
+      <div class="section-title compact-title"><div><h2>Candidatos em admissão</h2><p>O candidato preenche o formulário pelo link. Depois o RH converte em colaborador.</p></div>${statusPill(rows.length)}</div>
+      <table>
+        <thead><tr><th>Candidato</th><th>Resumo</th><th>Status</th><th>Link / ação</th></tr></thead>
+        <tbody>
+          ${
+            rows.length
+              ? rows.map((candidate) => {
+                  const link = admissionCandidateShareLink(candidate.token);
+                  return `<tr>
+                    <td><strong>${escapeHtml(candidate.name)}</strong><br><span>${escapeHtml(candidate.cpf || "CPF não informado")}</span></td>
+                    <td>${escapeHtml(admissionCandidateSummary(candidate))}<br><span class="admission-link">${escapeHtml(link)}</span></td>
+                    <td>${statusPill(admissionCandidateStatusLabel(candidate.status))}<br><span class="muted">${candidate.requestProtocol ? `Protocolo ${escapeHtml(candidate.requestProtocol)}` : "Registro local + pendente Supabase"}</span></td>
+                    <td class="row-actions">
+                      <button class="btn small" type="button" data-admission-candidate-copy="${candidate.token}">Copiar link</button>
+                      <button class="btn small primary" type="button" data-admission-candidate-convert="${candidate.token}" ${candidate.status === "submitted" && !directorMode ? "" : "disabled"}>Converter</button>
+                    </td>
+                  </tr>`;
+                }).join("")
+              : `<tr><td colspan="4"><div class="empty">Nenhum candidato em admissão para este filtro.</div></td></tr>`
+          }
+        </tbody>
+      </table>
+    </div>
+  </div>`;
+}
+
+async function saveAdmissionCandidateFromForm(form) {
+  const data = new FormData(form);
+  const token = createAdmissionToken();
+  const now = new Date().toISOString();
+  const candidate = {
+    token,
+    name: String(data.get("name") || "").trim(),
+    cpf: String(data.get("cpf") || "").trim(),
+    email: cleanEmail(data.get("email")),
+    phone: String(data.get("phone") || "").trim(),
+    company: String(data.get("company") || state.company || "Prodelar").trim(),
+    department: String(data.get("department") || "").trim() || "A definir",
+    role: String(data.get("role") || "").trim() || "A definir",
+    admission: normalizeDateInputValue(data.get("admission")),
+    notes: String(data.get("notes") || "").trim(),
+    status: "waiting_candidate",
+    createdBy: currentUser.name,
+    createdAt: now,
+    updatedAt: now,
+    answers: {},
+    documents: [],
+  };
+  const rows = [candidate, ...admissionCandidateStore()];
+  saveAdmissionCandidateStore(rows);
+  const persisted = await persistAdmissionCandidateRequest(candidate);
+  if (persisted.ok) {
+    candidate.requestId = persisted.id;
+    candidate.requestProtocol = persisted.protocol;
+    const candidateRecord = await persistAdmissionCandidateRecord(candidate);
+    if (candidateRecord.ok) candidate.admissionCandidateId = candidateRecord.id;
+    saveAdmissionCandidateStore([candidate, ...admissionCandidateStore().filter((item) => item.token !== token)]);
+    state.lastAdmissionCandidateToken = token;
+    state.peopleControlMessage = candidateRecord.ok
+      ? `Processo admissional criado no Supabase com protocolo ${persisted.protocol}. Link público: ${admissionCandidatePublicLink(token)}`
+      : `Solicitação criada no Supabase (${persisted.protocol}), mas a tabela de candidatos não gravou: ${candidateRecord.message}. Link público: ${admissionCandidatePublicLink(token)}`;
+    await loadSupabaseData();
+  } else {
+    state.lastAdmissionCandidateToken = token;
+    state.peopleControlMessage = `Link gerado, mas o Supabase não gravou a solicitação: ${persisted.message}. Link público: ${admissionCandidatePublicLink(token)}`;
+  }
+  state.peopleControlActiveModule = "admissionProcess";
+  renderPage();
+}
+
+async function persistAdmissionCandidateRequest(candidate) {
+  if (!supabaseClient) return { ok: false, message: "cliente Supabase indisponível" };
+  try {
+    const requestType = await getRequestTypeByLabel("Admissão");
+    const company = await getOrCreateCompany(candidate.company || "Prodelar");
+    const protocol = `RH-${new Date().getFullYear()}-${String(Date.now()).slice(-6)}`;
+    const { data, error } = await supabaseClient
+      .from("hr_requests")
+      .insert({
+        protocol_number: protocol,
+        request_type_id: requestType.id,
+        company_id: company.id,
+        employee_id: null,
+        status: "open",
+        title: `Processo admissional - ${candidate.name}`,
+        description: candidate.notes || `Candidato para ${candidate.role} em ${candidate.department}.`,
+        raw_data: {
+          source: "admission_process",
+          candidate,
+          candidate_token: candidate.token,
+          candidate_name: candidate.name,
+          candidate_email: candidate.email,
+          workflow_owner: "RH",
+          workflow_next: "Candidato",
+          workflow_status_label: "Aberto",
+          workflow_log: [
+            {
+              from: "Criação",
+              to: "Aguardando candidato",
+              by: currentUser.name,
+              at: new Date().toISOString(),
+              action: "Gerar link admissional",
+            },
+          ],
+        },
+      })
+      .select("id,protocol_number")
+      .single();
+    if (error) return { ok: false, message: error.message };
+    return { ok: true, id: data.id, protocol: data.protocol_number || protocol };
+  } catch (error) {
+    return { ok: false, message: error.message };
+  }
+}
+
+async function persistAdmissionCandidateRecord(candidate) {
+  if (!supabaseClient) return { ok: false, message: "cliente Supabase indisponível" };
+  try {
+    const company = await getOrCreateCompany(candidate.company || "Prodelar");
+    const department = await getOrCreateDepartment(company.id, candidate.department || "A definir");
+    const position = await getOrCreatePosition(candidate.role || "A definir");
+    const { data, error } = await supabaseClient
+      .from("hr_admission_candidates")
+      .upsert(
+        {
+          public_token: candidate.token,
+          request_id: candidate.requestId || null,
+          company_id: company.id,
+          department_id: department.id,
+          position_id: position.id,
+          full_name: candidate.name,
+          cpf: digitsOnly(candidate.cpf) || null,
+          email: cleanEmail(candidate.email) || null,
+          phone: candidate.phone || null,
+          company_name: candidate.company || "Prodelar",
+          department_name: candidate.department || "A definir",
+          role_name: candidate.role || "A definir",
+          planned_admission_date: candidate.admission || null,
+          notes: candidate.notes || null,
+          status: candidate.status || "waiting_candidate",
+          candidate_payload: candidate.answers || {},
+          document_manifest: candidate.documents || [],
+          created_by: state.authProfile?.id || null,
+        },
+        { onConflict: "public_token" },
+      )
+      .select("id,public_token")
+      .single();
+    if (error) return { ok: false, message: error.message };
+    return { ok: true, id: data.id, token: data.public_token };
+  } catch (error) {
+    return { ok: false, message: error.message };
+  }
+}
+
+async function syncAdmissionCandidateRequest(candidate) {
+  if (!supabaseClient || !candidate.requestId) return;
+  const { data } = await supabaseClient.from("hr_requests").select("raw_data").eq("id", candidate.requestId).maybeSingle();
+  await supabaseClient
+    .from("hr_requests")
+    .update({
+      description: candidate.notes || `Documentação admissional ${admissionCandidateStatusLabel(candidate.status).toLowerCase()}.`,
+      raw_data: {
+        ...(data?.raw_data || {}),
+        candidate,
+        candidate_status: candidate.status,
+        submitted_at: candidate.submittedAt || null,
+        converted_at: candidate.convertedAt || null,
+      },
+    })
+    .eq("id", candidate.requestId);
+}
+
+async function loadPublicAdmissionCandidate(token) {
+  if (!supabaseClient || !token) return;
+  try {
+    const { data, error } = await supabaseClient.rpc("get_admission_candidate_by_token", { p_token: token });
+    if (error) throw error;
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) return;
+    const candidate = {
+      token: row.public_token,
+      name: row.full_name || "",
+      cpf: row.cpf || "",
+      email: row.email || "",
+      phone: row.phone || "",
+      company: row.company_name || "",
+      department: row.department_name || "",
+      role: row.role_name || "",
+      admission: row.planned_admission_date || "",
+      status: row.status || "waiting_candidate",
+      answers: row.candidate_payload || {},
+      documents: [],
+    };
+    state.publicAdmissionCandidate = candidate;
+    const existingRows = admissionCandidateStore();
+    saveAdmissionCandidateStore([candidate, ...existingRows.filter((item) => item.token !== token)]);
+    if (getUrlPage() === "admissionCandidate" && state.publicAdmissionToken === token) {
+      commitAppHtml(admissionCandidatePage(), bindAdmissionCandidate);
+    }
+  } catch (error) {
+    state.publicAdmissionMessage = `Não consegui carregar os dados do link: ${error.message}`;
+    if (getUrlPage() === "admissionCandidate" && state.publicAdmissionToken === token) {
+      commitAppHtml(admissionCandidatePage(), bindAdmissionCandidate);
+    }
+  }
+}
+
+async function persistPublicAdmissionCandidateSubmission(candidate) {
+  if (!supabaseClient || !candidate.token) return { ok: false, message: "cliente Supabase indisponível" };
+  try {
+    const { data, error } = await supabaseClient.rpc("submit_admission_candidate_by_token", {
+      p_token: candidate.token,
+      p_payload: candidate.answers || {},
+      p_documents: candidate.documents || [],
+    });
+    if (error) return { ok: false, message: error.message };
+    return data ? { ok: true } : { ok: false, message: "token não encontrado ou já convertido" };
+  } catch (error) {
+    return { ok: false, message: error.message };
+  }
+}
+
+function admissionDocumentPath(token, fileName) {
+  const safeName = String(fileName || "documento")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 120) || "documento";
+  return `admission/${token}/${Date.now()}-${safeName}`;
+}
+
+async function uploadAdmissionCandidateDocuments(token, files) {
+  if (!files.length) return { ok: true, documents: [] };
+  if (!supabaseClient?.storage) {
+    return {
+      ok: false,
+      message: "Storage Supabase indisponível",
+      documents: files.map((file) => ({ name: file.name, size: file.size, type: file.type, upload_error: "Storage indisponível" })),
+    };
+  }
+  const documents = [];
+  for (const file of files) {
+    const path = admissionDocumentPath(token, file.name);
+    const { error } = await supabaseClient.storage
+      .from("hr-admission-documents")
+      .upload(path, file, {
+        cacheControl: "3600",
+        upsert: false,
+        contentType: file.type || "application/octet-stream",
+      });
+    documents.push({
+      name: file.name,
+      size: file.size,
+      type: file.type,
+      bucket: "hr-admission-documents",
+      storage_path: path,
+      uploaded_at: new Date().toISOString(),
+      upload_error: error?.message || "",
+    });
+  }
+  const failed = documents.filter((document) => document.upload_error);
+  return {
+    ok: failed.length === 0,
+    message: failed.map((document) => `${document.name}: ${document.upload_error}`).join("; "),
+    documents,
+  };
+}
+
+async function convertAdmissionCandidate(token) {
+  const candidate = admissionCandidateByToken(token);
+  if (!candidate) {
+    state.peopleControlMessage = "Candidato não encontrado.";
+    renderPage();
+    return;
+  }
+  if (!supabaseClient) {
+    state.peopleControlMessage = "Supabase indisponível para converter candidato em colaborador.";
+    renderPage();
+    return;
+  }
+  try {
+    const company = await getOrCreateCompany(candidate.company || "Prodelar");
+    const department = await getOrCreateDepartment(company.id, candidate.department || "A definir");
+    const position = await getOrCreatePosition(candidate.role || "A definir");
+    const employeeCode = `ADM-${String(Date.now()).slice(-8)}`;
+    const { data, error } = await supabaseClient
+      .from("hr_employees")
+      .insert({
+        company_id: company.id,
+        department_id: department.id,
+        position_id: position.id,
+        employee_code: employeeCode,
+        full_name: candidate.name,
+        cpf: digitsOnly(candidate.cpf) || null,
+        email: cleanEmail(candidate.email || candidate.answers?.email) || null,
+        admission_date: candidate.admission || null,
+        status: "active",
+        notes: candidate.notes || "",
+        raw_import: {
+          source: "admission_process",
+          candidate_token: candidate.token,
+          candidate_answers: candidate.answers || {},
+          candidate_documents: candidate.documents || [],
+        },
+      })
+      .select("id,employee_code")
+      .single();
+    if (error) throw error;
+    const updated = {
+      ...candidate,
+      status: "converted",
+      convertedAt: new Date().toISOString(),
+      employeeId: data.id,
+      employeeCode: data.employee_code,
+      updatedAt: new Date().toISOString(),
+    };
+    saveAdmissionCandidateStore(admissionCandidateStore().map((item) => (item.token === token ? updated : item)));
+    await syncAdmissionCandidateRequest(updated);
+    if (candidate.requestId) await supabaseClient.from("hr_requests").update({ status: "completed" }).eq("id", candidate.requestId);
+    await supabaseClient
+      .from("hr_admission_candidates")
+      .update({
+        status: "converted",
+        converted_employee_id: data.id,
+        converted_at: updated.convertedAt,
+        updated_at: updated.updatedAt,
+      })
+      .eq("public_token", token);
+    await recordEmployeeTimeline({
+      employeeId: data.id,
+      eventType: "admissao",
+      moduleName: "admissao",
+      title: "Admissão concluída",
+      description: `Candidato convertido pelo processo admissional ${candidate.requestProtocol || ""}.`,
+      relatedTable: "hr_employees",
+      relatedRecordId: data.id,
+      status: "concluido",
+      metadata: { candidate_token: token, request_id: candidate.requestId || "" },
+    });
+    state.peopleControlMessage = `${candidate.name} convertido em colaborador (${data.employee_code}).`;
+    await loadSupabaseData();
+  } catch (error) {
+    state.peopleControlMessage = `Não foi possível converter o candidato: ${error.message}`;
+    renderPage();
+  }
+}
+
+function admissionCandidatePage() {
+  const token = new URL(window.location.href).searchParams.get("token") || "";
+  const candidate = state.publicAdmissionCandidate?.token === token
+    ? state.publicAdmissionCandidate
+    : admissionCandidateByToken(token) || { token, name: "", email: "", phone: "", cpf: "", answers: {}, documents: [] };
+  const submitted = candidate.status === "submitted" || candidate.status === "converted";
+  return `<main class="auth-shell admission-public-shell">
+    <section class="auth-card admission-public-card">
+      <img class="auth-logo" src="./assets/grupo-prodelar-logos.png" alt="Grupo Prodelar" loading="eager" decoding="async" />
+      <div>
+        <p class="eyebrow">Processo admissional</p>
+        <h1>${escapeHtml(candidate.name || "Cadastro do candidato")}</h1>
+        <p>Preencha os dados e anexe os documentos solicitados pelo RH. Este formulário não cria vínculo de empregado automaticamente.</p>
+      </div>
+      ${state.publicAdmissionMessage ? `<div class="notice form-notice"><strong>Retorno</strong><p>${escapeHtml(state.publicAdmissionMessage)}</p></div>` : ""}
+      ${submitted ? `<div class="notice"><strong>Recebido</strong><p>Seus dados foram enviados ao RH. Aguarde a conferência da documentação.</p></div>` : ""}
+      <form id="candidate-public-form" class="auth-form admission-public-form">
+        <input type="hidden" name="token" value="${escapeHtml(token)}" />
+        <label><span>Nome completo</span><input name="name" required value="${escapeHtml(candidate.answers?.name || candidate.name || "")}" /></label>
+        <label><span>CPF</span><input name="cpf" required value="${escapeHtml(candidate.answers?.cpf || candidate.cpf || "")}" /></label>
+        <label><span>RG</span><input name="rg" value="${escapeHtml(candidate.answers?.rg || "")}" /></label>
+        <label><span>Data de nascimento</span>${dateMaskInput("birthDate", candidate.answers?.birthDate || "")}</label>
+        <label><span>E-mail</span><input name="email" type="email" required value="${escapeHtml(candidate.answers?.email || candidate.email || "")}" /></label>
+        <label><span>Telefone</span><input name="phone" required value="${escapeHtml(candidate.answers?.phone || candidate.phone || "")}" /></label>
+        <label><span>Endereço completo</span><textarea name="address" rows="3" required>${escapeHtml(candidate.answers?.address || "")}</textarea></label>
+        <label><span>Dados bancários</span><textarea name="bank" rows="2" placeholder="Banco, agência, conta e tipo de conta">${escapeHtml(candidate.answers?.bank || "")}</textarea></label>
+        <label><span>Dependentes</span><textarea name="dependents" rows="2" placeholder="Nome, CPF e parentesco, se houver">${escapeHtml(candidate.answers?.dependents || "")}</textarea></label>
+        <label><span>Documentos</span>${filePickerMarkup('<input name="documents" type="file" multiple />', "Selecionar documentos", "admission-document-picker")}</label>
+        <label><span>Observações</span><textarea name="notes" rows="3">${escapeHtml(candidate.answers?.notes || "")}</textarea></label>
+        <button class="btn primary" type="submit">Enviar documentação ao RH</button>
+      </form>
+    </section>
+  </main>`;
+}
+
+function bindAdmissionCandidate() {
+  const form = document.querySelector("#candidate-public-form");
+  if (!form) return;
+  bindDateMasks(form);
+  bindFileSelectionPreviews(form);
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void submitAdmissionCandidatePublic(form);
+  });
+}
+
+async function submitAdmissionCandidatePublic(form) {
+  const data = new FormData(form);
+  const token = String(data.get("token") || "");
+  const existing = admissionCandidateByToken(token) || { token, createdAt: new Date().toISOString() };
+  const fileInput = form.querySelector('input[name="documents"]');
+  const uploadResult = await uploadAdmissionCandidateDocuments(token, Array.from(fileInput?.files || []));
+  const documents = uploadResult.documents.length
+    ? uploadResult.documents
+    : (existing.documents || []);
+  const updated = {
+    ...existing,
+    name: String(data.get("name") || existing.name || "").trim(),
+    cpf: String(data.get("cpf") || existing.cpf || "").trim(),
+    email: cleanEmail(data.get("email")) || existing.email || "",
+    phone: String(data.get("phone") || existing.phone || "").trim(),
+    answers: {
+      name: String(data.get("name") || "").trim(),
+      cpf: String(data.get("cpf") || "").trim(),
+      rg: String(data.get("rg") || "").trim(),
+      birthDate: normalizeDateInputValue(data.get("birthDate")),
+      email: cleanEmail(data.get("email")),
+      phone: String(data.get("phone") || "").trim(),
+      address: String(data.get("address") || "").trim(),
+      bank: String(data.get("bank") || "").trim(),
+      dependents: String(data.get("dependents") || "").trim(),
+      notes: String(data.get("notes") || "").trim(),
+    },
+    documents: [...(existing.documents || []), ...documents],
+    status: "submitted",
+    submittedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  saveAdmissionCandidateStore([updated, ...admissionCandidateStore().filter((item) => item.token !== token)]);
+  const persisted = await persistPublicAdmissionCandidateSubmission(updated);
+  state.publicAdmissionCandidate = updated;
+  state.publicAdmissionMessage = persisted.ok && uploadResult.ok
+    ? "Documentação enviada e gravada no Supabase para conferência do RH."
+    : `Documentação recebida, mas houve alerta: ${[persisted.ok ? "" : persisted.message, uploadResult.ok ? "" : uploadResult.message].filter(Boolean).join(" · ")}`;
+  void syncAdmissionCandidateRequest(updated);
+  commitAppHtml(admissionCandidatePage(), bindAdmissionCandidate);
+}
+
 function peopleControlsPage() {
   const directorMode = currentUser.profile === "Diretoria";
   const activeCompany = ["RH", "Diretoria"].includes(currentUser.profile) ? state.company : currentUser.company;
-  const activeModule = peopleControlModules.find((module) => module.key === state.peopleControlActiveModule) || peopleControlModules[0];
-  const restrictedModules = peopleControlModules.filter((module) => {
+  const visibleModules = visiblePeopleControlModules();
+  const activeModule = visibleModules.find((module) => module.key === state.peopleControlActiveModule) || visibleModules[0] || peopleControlModules[0];
+  const restrictedModules = visibleModules.filter((module) => {
     const sensitivity = module.sensitivity.toLowerCase();
     return sensitivity.includes("sensível") || sensitivity.includes("restrito");
   });
   const storedEvents = peopleControlEventStore();
-  const pendingReceived = peopleControlModules.reduce((total, module) => total + (module.receivedRows?.length || 0), 0);
-  const modulesWithFile = peopleControlModules.filter((module) => module.formFields?.some(([, type]) => type === "file")).length;
+  const pendingReceived = visibleModules.reduce((total, module) => total + (module.receivedRows?.length || 0), 0);
+  const modulesWithFile = visibleModules.filter((module) => module.formFields?.some(([, type]) => type === "file")).length;
   return `
     ${["RH", "Diretoria"].includes(currentUser.profile) ? companySwitcher(activeCompany, "people-control-company") : lockedCompanyIndicator(activeCompany)}
     ${state.peopleControlMessage ? `<div class="notice" style="margin-top:16px"><strong>Retorno</strong><p>${state.peopleControlMessage}</p></div>` : ""}
@@ -5831,7 +7331,7 @@ function peopleControlsPage() {
       <div class="section-title">
         <div>
           <h2>Controles operacionais do RH</h2>
-          <p>Rotina própria para lançar atestados, ASO, contratos de experiência, treinamentos, EPI, benefícios, comunicados e outros controles administrativos.</p>
+          <p>Rotina própria para lançar atestados, ASO, contratos de experiência, treinamentos, EPI, benefícios e outros controles administrativos.</p>
         </div>
         ${statusPill("Rotina RH")}
       </div>
@@ -5851,8 +7351,8 @@ function peopleControlsPage() {
         <div><h2>Módulos de controle</h2><p>Escolha o controle que o RH precisa lançar ou acompanhar. O formulário operacional abre abaixo.</p></div>
         ${statusPill(directorMode ? "Visão diretoria" : "RH")}
       </div>
-      <div class="status-strip">
-        ${peopleControlModules
+      <div class="status-strip people-control-module-strip">
+        ${visibleModules
           .map(
             (module) => `<button class="status-card people-control-module-card ${activeModule.key === module.key ? "active" : ""}" type="button" data-people-control-module="${module.key}">
               <strong>${module.title}</strong><span>${module.status}</span><em>${activeModule.key === module.key ? "Controle aberto" : "Abrir controle"}</em>
@@ -5862,7 +7362,7 @@ function peopleControlsPage() {
       </div>
       <div class="notice muted-notice" style="margin-top:14px">
         <strong>Regra da rotina</strong>
-        <p>Todo lançamento fica vinculado ao colaborador, empresa, documento quando houver, status e linha do tempo funcional. Alertas e e-mails entram depois por template.</p>
+        <p>Todo lançamento fica vinculado ao colaborador, empresa, documento quando houver, status e histórico funcional. Comunicados e e-mails ficam na Central de Comunicação RH.</p>
       </div>
     </div>
     <div id="people-control-panel" class="card pad people-control-panel" style="margin-top:16px">
@@ -5877,7 +7377,7 @@ function peopleControlsPage() {
       }
       ${
         activeModule.receives
-          ? `<div class="card table-wrap" style="margin-top:14px">
+          ? `<div class="card table-wrap people-control-subcard people-control-table-card" style="margin-top:14px">
               <div class="section-title compact-title"><div><h2>Pendências recebidas</h2><p>Itens enviados por colaborador/liderança que precisam de validação do RH.</p></div>${statusPill(activeModule.receivedRows?.length || 0)}</div>
               <table>
                 <thead><tr><th>Origem</th><th>Colaborador</th><th>Status</th><th>Ação</th></tr></thead>
@@ -5893,31 +7393,33 @@ function peopleControlsPage() {
           : ""
       }
       ${
-        activeModule.key === "timeline"
-          ? `<div class="card pad" style="margin-top:14px">
+        activeModule.key === "admissionProcess"
+          ? admissionProcessPanel(directorMode, activeCompany)
+          : activeModule.key === "timeline"
+          ? `<div class="card pad people-control-subcard" style="margin-top:14px">
               <div class="section-title"><div><h2>Consultar linha do tempo</h2><p>Localize o colaborador para ver a vida funcional consolidada.</p></div>${statusPill("Consulta")}</div>
-              <div class="field-grid routine-fields">${peopleControlInput(activeModule, ["Colaborador", "employee"], activeCompany)}</div>
+              <div class="field-grid routine-fields people-control-fields">${peopleControlInput(activeModule, ["Colaborador", "employee"], activeCompany)}</div>
               ${timeline()}
             </div>`
-          : `<div class="card pad" style="margin-top:14px">
+          : `<div class="card pad people-control-subcard" style="margin-top:14px">
               <div class="section-title"><div><h2>Novo lançamento</h2><p>Registro operacional vinculado ao colaborador e à empresa selecionada.</p></div>${statusPill(activeCompany)}</div>
-              <div class="field-grid routine-fields">
+              <div class="field-grid routine-fields people-control-fields">
                 ${activeModule.formFields.map((field) => peopleControlInput(activeModule, field, activeCompany)).join("")}
               </div>
-              <div class="form-actions">
+              <div class="form-actions people-control-actions">
                 <button class="btn primary" type="button" data-people-control-save="${activeModule.key}" ${directorMode ? "disabled" : ""}>Salvar lançamento</button>
               </div>
             </div>`
       }
-      <div class="card table-wrap" style="margin-top:14px">
-        <div class="section-title compact-title"><div><h2>Histórico/lista do módulo</h2><p>Últimos 15 eventos. Consulta sem desfazer ação.</p></div>${statusPill("Linha do tempo")}</div>
+      ${activeModule.key === "admissionProcess" ? "" : `<div class="card table-wrap people-control-subcard people-control-table-card" style="margin-top:14px">
+        <div class="section-title compact-title"><div><h2>Histórico/lista do módulo</h2><p>Últimos 15 eventos. Consulta sem desfazer ação.</p></div>${statusPill("Histórico")}</div>
         <table>
           <thead><tr><th>Evento</th><th>Colaborador/público</th><th>Status</th><th>Ação</th></tr></thead>
           <tbody>
             ${peopleControlHistoryRows(activeModule) || `<tr><td colspan="4"><div class="empty">Nenhum evento registrado neste módulo.</div></td></tr>`}
           </tbody>
         </table>
-      </div>
+      </div>`}
     </div>`;
 }
 
@@ -6085,30 +7587,224 @@ function communicationEventMatches(event, query) {
 
 function communicationTemplateMatches(template, query) {
   if (!query) return true;
-  return [template.template_key, template.module_name, template.recipient_type, template.subject_template, template.delivery_channel, template.audience_scope]
+  return [
+    template.template_key,
+    communicationTemplateFriendlyName(template),
+    communicationTemplateKeywords(template),
+    template.module_name,
+    template.recipient_type,
+    template.subject_template,
+    template.body_template,
+    template.body_html_template,
+    template.delivery_channel,
+    template.audience_scope,
+  ]
     .some((value) => normalizeText(value).includes(query));
+}
+
+function communicationSelectedCompany() {
+  const selected = state.communicationCompany || "";
+  const availableCompanies = visibleCompaniesForRequest();
+  const canUseGroup = ["RH", "Diretoria"].includes(currentUser.profile);
+  if (selected === "Todas" && canUseGroup) return "Todas";
+  if (availableCompanies.some((company) => company.key === selected)) return selected;
+  if (currentUser.company && currentUser.company !== "Todas") return currentUser.company;
+  return canUseGroup ? "Todas" : availableCompanies[0]?.key || "Prodelar";
+}
+
+function communicationCompanyLabel(value = communicationSelectedCompany()) {
+  return value === "Todas" ? "Grupo todo" : value;
+}
+
+function communicationCompanyChoices() {
+  const availableCompanies = visibleCompaniesForRequest();
+  const canUseGroup = ["RH", "Diretoria"].includes(currentUser.profile);
+  const rows = canUseGroup ? [["Todas", "Grupo todo", "Usar as três empresas"]] : [];
+  availableCompanies.forEach((company) => {
+    rows.push([company.key, company.label, "Setores e colaboradores da empresa"]);
+  });
+  return rows;
+}
+
+function communicationScopedEmployees() {
+  const selectedCompany = communicationSelectedCompany();
+  return employees
+    .filter((employee) => employeeStatus(employee) === "Ativo")
+    .filter((employee) => selectedCompany === "Todas" || normalizeText(employee.company) === normalizeText(selectedCompany));
 }
 
 function communicationEmployeeOptions() {
   const query = normalizeText(state.communicationRecipientQuery);
-  return employees
-    .filter((employee) => employeeStatus(employee) === "Ativo")
+  if (!query && !state.communicationEmployeeId) return [];
+  return communicationScopedEmployees()
     .filter((employee) => !query || [employee.name, employee.company, employee.department, employee.role, employee.email].some((value) => normalizeText(value).includes(query)))
     .sort((a, b) => a.name.localeCompare(b.name, "pt-BR"))
     .slice(0, 30);
 }
 
+function communicationAudienceChoices() {
+  return [
+    ["employee", "Colaborador", "Uma pessoa específica"],
+    ["all", "Todos", "Todos da empresa selecionada"],
+    ["department", "Setor", "Um setor da empresa"],
+    ["role", "Cargo", "Uma função/cargo"],
+    ["profile", "Perfil", "RH, diretoria, gerente ou colaborador"],
+  ];
+}
+
+function communicationAudienceLabel(value = state.communicationAudience) {
+  return communicationAudienceChoices().find(([key]) => key === value)?.[1] || "Colaborador";
+}
+
+function employeeCommunicationProfile(employee) {
+  return simulatedProfileForEmployee(employee) || employee.profile || "Colaborador";
+}
+
+function communicationAudienceOptionRows() {
+  const query = normalizeText(state.communicationRecipientQuery);
+  const scopedEmployees = communicationScopedEmployees();
+  if (state.communicationAudience === "employee") return communicationEmployeeOptions().map((employee) => ({
+    key: employee.dbId || employee.id,
+    title: employee.name,
+    detail: `${employee.company} · ${employee.department || "Sem setor"} · ${employee.role || "Sem cargo"}`,
+    meta: employeeEmailForDelivery(employee) || "sem e-mail válido: segue pelo app",
+    count: 1,
+    employee,
+  }));
+  if (state.communicationAudience === "all") {
+    return [{
+      key: "all",
+      title: communicationSelectedCompany() === "Todas" ? "Todos os colaboradores ativos" : `Todos da ${communicationSelectedCompany()}`,
+      detail: communicationCompanyLabel(),
+      meta: `${scopedEmployees.length} destinatário${scopedEmployees.length === 1 ? "" : "s"}`,
+      count: scopedEmployees.length,
+    }];
+  }
+  if (!query && !state.communicationAudienceValue) return [];
+
+  const fieldMap = {
+    department: ["department", "Setor"],
+    role: ["role", "Cargo"],
+    profile: ["profile", "Perfil"],
+  };
+  const [field, label] = fieldMap[state.communicationAudience] || fieldMap.department;
+  const grouped = new Map();
+  scopedEmployees.forEach((employee) => {
+    const value = field === "profile" ? employeeCommunicationProfile(employee) : employee[field];
+    const title = value || `Sem ${label.toLowerCase()}`;
+    const key = normalizeText(title);
+    if (query && ![title, employee.name, employee.company, employee.department, employee.role, employee.email].some((item) => normalizeText(item).includes(query))) return;
+    const row = grouped.get(key) || {
+      key: title,
+      title,
+      detail: `${label} · ${communicationCompanyLabel()}`,
+      meta: "",
+      count: 0,
+      missingEmail: 0,
+    };
+    row.count += 1;
+    if (!employeeEmailForDelivery(employee)) row.missingEmail += 1;
+    row.meta = `${row.count} destinatário${row.count === 1 ? "" : "s"}${row.missingEmail ? ` · ${row.missingEmail} sem e-mail` : ""}`;
+    grouped.set(key, row);
+  });
+  return [...grouped.values()].sort((a, b) => a.title.localeCompare(b.title, "pt-BR")).slice(0, 30);
+}
+
 function selectedCommunicationEmployee() {
-  return employees.find((employee) => employee.id === state.communicationEmployeeId || employee.dbId === state.communicationEmployeeId) || null;
+  const selectedId = String(state.communicationEmployeeId || "");
+  if (!selectedId) return null;
+  return employees.find((employee) => String(employee.id || "") === selectedId || String(employee.dbId || "") === selectedId) || null;
+}
+
+function selectedCommunicationTargets() {
+  const activeEmployees = communicationScopedEmployees();
+  if (state.communicationAudience === "employee") {
+    const selected = selectedCommunicationEmployee();
+    return selected ? [selected] : [];
+  }
+  if (state.communicationAudience === "all") return activeEmployees;
+  if (!state.communicationAudienceValue) return [];
+  if (state.communicationAudience === "department") return activeEmployees.filter((employee) => normalizeText(employee.department) === normalizeText(state.communicationAudienceValue));
+  if (state.communicationAudience === "role") return activeEmployees.filter((employee) => normalizeText(employee.role) === normalizeText(state.communicationAudienceValue));
+  if (state.communicationAudience === "profile") return activeEmployees.filter((employee) => normalizeText(employeeCommunicationProfile(employee)) === normalizeText(state.communicationAudienceValue));
+  return [];
+}
+
+function selectedCommunicationPreviewEmployee() {
+  return selectedCommunicationTargets()[0] || selectedCommunicationEmployee() || null;
 }
 
 function selectedCommunicationTemplate() {
-  return emailTemplateRows.find((template) => template.template_key === state.communicationTemplateKey) || emailTemplateRows[0] || null;
+  const templateKey = String(state.communicationTemplateKey || "").trim();
+  if (!templateKey) return null;
+  return emailTemplateRows.find((template) => String(template.template_key || "") === templateKey) || null;
+}
+
+function communicationTemplateFriendlyName(template) {
+  const key = String(template?.template_key || "");
+  const explicit = template?.payload?.display_name || "";
+  if (explicit) return explicit;
+  const labels = {
+    primeiro_dia_colaborador: "Boas-vindas do colaborador",
+    ferias_aprovadas_colaborador: "Férias aprovadas",
+    contracheque_disponivel: "Contracheque disponível",
+    pendencia_ponto_colaborador: "Pendência de ponto",
+    aso_vencendo_rh: "ASO vencendo",
+    aso_vencido_rh: "ASO vencido",
+    desligamento_colaborador_grupo: "Comunicado de desligamento ao grupo",
+    comunicado_avulso_individual: "Comunicado individual",
+    comunicado_avulso_departamento: "Comunicado por departamento",
+    comunicado_avulso_empresa: "Comunicado por empresa",
+    comunicado_avulso_grupo: "Comunicado para todo o grupo",
+    relatorio_mensal_diretoria: "Relatório mensal para diretoria",
+  };
+  if (labels[key]) return labels[key];
+  const subject = String(template?.subject_template || "").replace(/\[RH\]\s*/i, "").replace(/\{\{.*?\}\}/g, "").trim();
+  if (subject) return subject.charAt(0).toUpperCase() + subject.slice(1);
+  return key.split("_").filter(Boolean).map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(" ");
+}
+
+function communicationTemplateKeywords(template) {
+  const text = `${template?.template_key || ""} ${template?.subject_template || ""} ${template?.body_template || ""}`;
+  const words = [];
+  if (/ferias|férias|periodo aquisitivo|descanso/i.test(text)) words.push("férias alteração programação solicitação descanso");
+  if (/ponto|ajuste|espelho/i.test(text)) words.push("ponto ajuste jornada");
+  if (/aso|exame|ocupacional/i.test(text)) words.push("aso exame ocupacional saúde");
+  if (/contracheque|folha|pagamento/i.test(text)) words.push("contracheque folha pagamento salario salário");
+  if (/admiss|primeiro dia|boas/i.test(text)) words.push("admissão boas-vindas primeiro dia");
+  if (/deslig|demiss|rescis/i.test(text)) words.push("desligamento demissão rescisão");
+  return words.join(" ");
+}
+
+function communicationTemplateTopicLabels(template) {
+  const text = normalizeText(`${template?.template_key || ""} ${template?.subject_template || ""} ${template?.body_template || ""} ${communicationTemplateFriendlyName(template)}`);
+  const topics = [];
+  if (text.includes("FERIAS")) topics.push("Férias");
+  if (text.includes("PONTO")) topics.push("Ponto");
+  if (text.includes("ASO") || text.includes("OCUPACIONAL")) topics.push("ASO");
+  if (text.includes("CONTRACHEQUE") || text.includes("FOLHA") || text.includes("SALARIO")) topics.push("Folha");
+  if (text.includes("ADMISSAO")) topics.push("Admissão");
+  if (text.includes("DESLIGAMENTO") || text.includes("DEMISSAO") || text.includes("RESCISAO")) topics.push("Desligamento");
+  if (text.includes("ANIVERSARIO")) topics.push("Aniversário");
+  if (!topics.length) topics.push(template?.module_name || "RH");
+  return topics.slice(0, 3);
+}
+
+function communicationTemplateRequiresReview(template) {
+  const text = normalizeText([
+    template?.template_key,
+    template?.module_name,
+    template?.event_type,
+    template?.subject_template,
+    template?.body_template,
+    communicationTemplateFriendlyName(template),
+  ].join(" "));
+  return ["ADMISSAO", "ADMISSION", "DEMISSAO", "DESLIGAMENTO", "RESCISAO"].some((term) => text.includes(term));
 }
 
 function communicationTemplateLabel(template) {
   if (!template) return "Sem template";
-  return `${template.template_key}${template.subject_template ? ` · ${template.subject_template}` : ""}`;
+  return `${communicationTemplateFriendlyName(template)}${template.subject_template ? ` · ${template.subject_template}` : ""}`;
 }
 
 function communicationStatusCards() {
@@ -6128,6 +7824,277 @@ function communicationStatusCards() {
   ].map(([status, label, count]) => `<div class="communication-status-card ${communicationStatusMeta(status)[1]}"><span>${escapeHtml(label)}</span><strong>${count}</strong></div>`).join("");
 }
 
+function communicationDeliveryChannel(template, employee) {
+  const selectedChannel = state.communicationChannel || "both";
+  const wantsEmail = selectedChannel === "email" || selectedChannel === "both";
+  const hasEmail = Boolean(employeeEmailForDelivery(employee));
+  const wantsApp = selectedChannel === "app" || selectedChannel === "both" || (wantsEmail && !hasEmail);
+  return {
+    email: wantsEmail && hasEmail,
+    app: wantsApp || !hasEmail,
+    missingEmail: wantsEmail && !hasEmail,
+    label: wantsEmail && hasEmail && wantsApp ? "E-mail + App" : wantsEmail && hasEmail ? "E-mail" : "Somente App",
+  };
+}
+
+function communicationAudienceDelivery(template, targets) {
+  const summary = targets.reduce((acc, employee) => {
+    const delivery = communicationDeliveryChannel(template, employee);
+    if (delivery.email) acc.email += 1;
+    if (delivery.app) acc.app += 1;
+    if (delivery.missingEmail) acc.missingEmail += 1;
+    return acc;
+  }, { email: 0, app: 0, missingEmail: 0 });
+  const parts = [];
+  if (summary.email) parts.push(`${summary.email} por e-mail`);
+  if (summary.app) parts.push(`${summary.app} no app`);
+  if (!parts.length) parts.push("Nenhum canal selecionado");
+  if (summary.missingEmail) parts.push(`${summary.missingEmail} sem e-mail`);
+  return { ...summary, label: parts.join(" · ") };
+}
+
+function communicationTemplateKey(template) {
+  return String(template?.template_key || "").trim();
+}
+
+function communicationIsVacationApprovedTemplate(template) {
+  const text = normalizeText([
+    communicationTemplateKey(template),
+    communicationTemplateFriendlyName(template),
+    template?.subject_template,
+    template?.body_template,
+  ].join(" "));
+  return text.includes("FERIAS") && (text.includes("APROVADA") || text.includes("APROVADO"));
+}
+
+function communicationVacationForEmployee(employee) {
+  if (!employee) return null;
+  const employeeId = String(employee.dbId || employee.id || "");
+  const employeeName = normalizeText(employee.name);
+  return vacationForecasts.find((row) => {
+    const rowId = String(row.employee_id || row.raw_import?.employee_id || "");
+    return rowId && rowId === employeeId;
+  }) || vacationForecasts.find((row) => normalizeText(row.employee_name) === employeeName) || null;
+}
+
+function communicationDateOrPending(value) {
+  if (!value) return "A definir";
+  const formatted = formatDate(value);
+  return formatted === "Sem data" ? "A definir" : formatted;
+}
+
+function communicationVacationContext(employee) {
+  const row = communicationVacationForEmployee(employee);
+  const start = communicationDateOrPending(row?.planned_start);
+  const end = communicationDateOrPending(row?.planned_end);
+  const period = row?.planned_start && row?.planned_end ? `${start} a ${end}` : "A definir";
+  return {
+    ferias_periodo: period,
+    periodo: period,
+    data_inicio: start,
+    data_fim: end,
+    gestor_nome: employee?.manager && employee.manager !== "Sem líder" ? employee.manager : "RH",
+    periodo_aquisitivo: row?.acquisition_label || (row?.acquisition_start && row?.acquisition_end ? `${formatDate(row.acquisition_start)} a ${formatDate(row.acquisition_end)}` : "A definir"),
+    saldo_ferias: row?.balance_days ?? "A definir",
+  };
+}
+
+function communicationFooterHtml(company) {
+  return `<tr><td style="background:#f1f5f7;color:#65748a;padding:16px 28px;font-size:12px;line-height:1.45">
+    <strong style="color:#65748a">Recursos Humanos · ${escapeHtml(company || "Grupo Prodelar")}</strong><br>
+    <a href="mailto:rh@grupoprodelar.com.br" style="color:#1a5c3a;text-decoration:none">rh@grupoprodelar.com.br</a> · Mensagem automática.<br>
+    Não responda este e-mail. Em caso de dúvidas, acesse o portal.
+  </td></tr>`;
+}
+
+function communicationManualComplementData(payload) {
+  const deadline = String(payload?.prazo_informado || "").trim();
+  const note = String(payload?.observacao_informada || "").trim();
+  const rows = [];
+  if (deadline) rows.push(["Prazo", deadline]);
+  if (note) rows.push(["Observação do RH", note]);
+  return rows;
+}
+
+function communicationManualComplementHtml(payload) {
+  const rows = communicationManualComplementData(payload);
+  if (!rows.length) return "";
+  return `<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;margin-top:18px;background:#f8fbfc;border:1px solid #d9e0e8;border-radius:8px">
+    ${rows.map(([label, value]) => `<tr>
+      <td style="border-top:1px solid #e5ebf0;padding:12px 14px;color:#65748a;width:34%;vertical-align:top">${escapeHtml(label)}</td>
+      <td style="border-top:1px solid #e5ebf0;padding:12px 14px;color:#16212f;font-weight:bold;line-height:1.45">${escapeHtml(value).replace(/\n/g, "<br>")}</td>
+    </tr>`).join("")}
+  </table>`;
+}
+
+function communicationInjectManualComplement(bodyHtml, payload) {
+  const rows = communicationManualComplementData(payload);
+  if (!rows.length || !bodyHtml) return bodyHtml;
+  const tableBlock = `<tr><td style="padding:0 28px 24px">${communicationManualComplementHtml(payload)}</td></tr>`;
+  if (/<tr><td[^>]*background:\s*#f1f5f7/i.test(bodyHtml)) {
+    return bodyHtml.replace(/(<tr><td[^>]*background:\s*#f1f5f7)/i, `${tableBlock}$1`);
+  }
+  const standaloneBlock = `<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f4f7f9;padding:0 0 24px"><tr><td align="center"><table role="presentation" width="640" cellspacing="0" cellpadding="0" style="width:640px;max-width:100%;background:#ffffff;border:1px solid #d9e0e8"><tr><td style="padding:24px 28px">${communicationManualComplementHtml(payload)}</td></tr></table></td></tr></table>`;
+  if (/<\/body>/i.test(bodyHtml)) return bodyHtml.replace(/<\/body>/i, `${standaloneBlock}</body>`);
+  return `${bodyHtml}${standaloneBlock}`;
+}
+
+function communicationVacationApprovedHtml(subject, payload) {
+  const logo = payload.empresa_logo_url || payload.logo_url || "";
+  return `<!doctype html><html><body style="margin:0;background:#f4f7f9;font-family:Arial,Helvetica,sans-serif;color:#16212f">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f4f7f9;padding:24px 0">
+      <tr><td align="center">
+        <table role="presentation" width="640" cellspacing="0" cellpadding="0" style="width:640px;max-width:100%;background:#ffffff;border:1px solid #d9e0e8;border-collapse:collapse">
+          <tr><td style="background:#1a5c3a;color:#ffffff;padding:22px 28px">
+            ${logo ? `<img src="${escapeHtml(logo)}" alt="${escapeHtml(payload.empresa || "Prodelar")}" width="132" style="display:block;background:#ffffff;border-radius:6px;padding:8px;max-width:132px;height:auto;margin-bottom:12px">` : ""}
+            <div style="font-size:13px;line-height:1.4">Recursos Humanos · ${escapeHtml(payload.empresa || "Grupo Prodelar")}</div>
+          </td></tr>
+          <tr><td style="height:5px;background:#e87722"></td></tr>
+          <tr><td style="padding:28px">
+            <span style="display:inline-block;background:#eaf3de;color:#1a5c3a;border-radius:999px;padding:6px 14px;font-size:12px;font-weight:bold">Aprovado</span>
+            <h1 style="margin:18px 0 16px;font-size:24px;line-height:1.25;color:#1a5c3a">${escapeHtml(subject || "[RH] Férias aprovadas")}</h1>
+            <p style="margin:0 0 16px;line-height:1.5">Olá ${escapeHtml(payload.colaborador_nome)},</p>
+            <p style="margin:0 0 20px;line-height:1.5">Sua programação de férias foi aprovada${payload.periodo && payload.periodo !== "A definir" ? ` para o período ${escapeHtml(payload.periodo)}` : ""}.</p>
+            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;margin-top:8px">
+              <tr><td style="border-top:1px solid #e5ebf0;padding:10px 0;color:#65748a">Colaborador</td><td style="border-top:1px solid #e5ebf0;padding:10px 0;text-align:right;font-weight:bold">${escapeHtml(payload.colaborador_nome)}</td></tr>
+              <tr><td style="border-top:1px solid #e5ebf0;padding:10px 0;color:#65748a">Empresa</td><td style="border-top:1px solid #e5ebf0;padding:10px 0;text-align:right;font-weight:bold">${escapeHtml(payload.empresa)}</td></tr>
+              <tr><td style="border-top:1px solid #e5ebf0;padding:10px 0;color:#65748a">Período</td><td style="border-top:1px solid #e5ebf0;padding:10px 0;text-align:right;font-weight:bold">${escapeHtml(payload.periodo)}</td></tr>
+              <tr><td style="border-top:1px solid #e5ebf0;padding:10px 0;color:#65748a">Data início</td><td style="border-top:1px solid #e5ebf0;padding:10px 0;text-align:right;font-weight:bold">${escapeHtml(payload.data_inicio)}</td></tr>
+              <tr><td style="border-top:1px solid #e5ebf0;padding:10px 0;color:#65748a">Data fim</td><td style="border-top:1px solid #e5ebf0;padding:10px 0;text-align:right;font-weight:bold">${escapeHtml(payload.data_fim)}</td></tr>
+              <tr><td style="border-top:1px solid #e5ebf0;padding:10px 0;color:#65748a">Gestor</td><td style="border-top:1px solid #e5ebf0;padding:10px 0;text-align:right;font-weight:bold">${escapeHtml(payload.gestor_nome)}</td></tr>
+            </table>
+            ${communicationManualComplementHtml(payload)}
+          </td></tr>
+          ${communicationFooterHtml(payload.empresa)}
+        </table>
+      </td></tr>
+    </table>
+  </body></html>`;
+}
+
+function communicationAppCardContent(template, payload, fallbackSubject = "") {
+  if (!template) {
+    return {
+      title: "Comunicado do RH",
+      body: "Selecione um template para visualizar o card que será publicado no app.",
+    };
+  }
+  if (communicationIsVacationApprovedTemplate(template)) {
+    const parts = [payload.periodo && payload.periodo !== "A definir"
+      ? `Sua programação de férias foi aprovada para ${payload.periodo}.`
+      : "Sua programação de férias foi aprovada. Consulte o RH para confirmar o período."];
+    if (payload.prazo_informado) parts.push(`Prazo: ${payload.prazo_informado}.`);
+    if (payload.observacao_informada) parts.push(payload.observacao_informada);
+    return {
+      title: "Férias aprovadas",
+      body: parts.join(" "),
+    };
+  }
+  const subject = fallbackSubject || payload.titulo || communicationTemplateFriendlyName(template);
+  const message = payload.observacao && payload.observacao !== subject ? payload.observacao : "Acesse esta comunicação para conferir os detalhes.";
+  return { title: subject, body: message };
+}
+
+function communicationPayload(employee, template) {
+  const company = employee?.company || "Prodelar";
+  const logoUrl = companyEmailLogoUrl(company);
+  const subject = template ? communicationTemplateFriendlyName(template) : "Comunicado do RH";
+  const manualDeadline = state.communicationDeadline.trim();
+  const manualNote = state.communicationNote.trim();
+  const message = manualNote || subject || "Comunicado do RH";
+  const vacationContext = communicationVacationContext(employee);
+  return {
+    colaborador_nome: employee?.name || "Carlos Teste",
+    employee_name: employee?.name || "Carlos Teste",
+    recipient_name: employee?.name || "Carlos Teste",
+    recipient_email: employeeEmailForDelivery(employee),
+    assunto: subject,
+    titulo: subject,
+    empresa: company,
+    empresa_logo_url: logoUrl,
+    company_logo_url: logoUrl,
+    logo_url: logoUrl,
+    departamento: employee?.department || "Administrativo",
+    cargo: employee?.role || "Colaborador",
+    prazo: manualDeadline || "Sem prazo",
+    prazo_informado: manualDeadline,
+    data: formatDate(new Date().toISOString()),
+    competencia: routineCompetenceLabel(currentMonthKey()),
+    ...vacationContext,
+    observacao: message,
+    observacao_informada: manualNote,
+    complemento: message,
+    complemento_informado: manualNote,
+    mensagem: message,
+    mensagem_informada: manualNote,
+    recorrencia: state.communicationRecurrence,
+    link: PUBLIC_APP_URL,
+    portal_url: PUBLIC_APP_URL,
+    remetente_nome: currentUser.name,
+  };
+}
+
+function communicationFallbackHtml(subject, bodyText, payload) {
+  const safeBody = escapeHtml(bodyText || payload.observacao || subject).replace(/\n/g, "<br>");
+  return `<!doctype html><html><body style="margin:0;background:#f4f7f9;font-family:Arial,Helvetica,sans-serif;color:#16212f">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f4f7f9;padding:24px 0">
+      <tr><td align="center">
+        <table role="presentation" width="640" cellspacing="0" cellpadding="0" style="width:640px;max-width:100%;background:#ffffff;border:1px solid #d9e0e8">
+          <tr><td style="background:#1a5c3a;color:#ffffff;padding:22px 28px;font-weight:bold">Recursos Humanos · Grupo Prodelar</td></tr>
+          <tr><td style="height:5px;background:#e87722"></td></tr>
+          <tr><td style="padding:28px">
+            <p style="margin:0 0 12px;color:#1a5c3a;font-weight:bold">${escapeHtml(payload.empresa || "Grupo Prodelar")}</p>
+            <h1 style="margin:0 0 18px;font-size:24px;color:#16212f">${escapeHtml(subject)}</h1>
+            <p style="margin:0 0 18px">Olá ${escapeHtml(payload.colaborador_nome)},</p>
+            <p style="margin:0 0 18px;line-height:1.5">${safeBody}</p>
+            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;margin-top:18px">
+              <tr><td style="border-top:1px solid #d9e0e8;padding:10px 0;color:#65748a">Empresa</td><td style="border-top:1px solid #d9e0e8;padding:10px 0;text-align:right;font-weight:bold">${escapeHtml(payload.empresa)}</td></tr>
+              <tr><td style="border-top:1px solid #d9e0e8;padding:10px 0;color:#65748a">Prazo</td><td style="border-top:1px solid #d9e0e8;padding:10px 0;text-align:right;font-weight:bold">${escapeHtml(payload.prazo)}</td></tr>
+            </table>
+          </td></tr>
+          <tr><td style="background:#f1f5f7;color:#65748a;padding:16px 28px;font-size:12px">rh@grupoprodelar.com.br · Mensagem automática</td></tr>
+        </table>
+      </td></tr>
+    </table>
+  </body></html>`;
+}
+
+function communicationFinalPreview(template, employee) {
+  if (!template) {
+    const payload = communicationPayload(employee, null);
+    return {
+      payload,
+      subject: "",
+      bodyText: "",
+      bodyHtml: "",
+    };
+  }
+  const payload = communicationPayload(employee, template);
+  let subject = renderEmailTemplateValue(template?.subject_template || communicationTemplateFriendlyName(template), payload);
+  if (communicationIsVacationApprovedTemplate(template) && payload.periodo === "A definir") {
+    subject = subject.replace(/\s*-\s*A definir\s*$/i, "").trim();
+  }
+  const bodyText = renderEmailTemplateValue(template?.body_template || payload.observacao || subject, payload);
+  const rawBodyHtml = communicationIsVacationApprovedTemplate(template)
+    ? communicationVacationApprovedHtml(subject, payload)
+    : template?.body_html_template
+      ? renderEmailTemplateValue(template.body_html_template, payload).replace(/\\n/g, "<br>")
+      : communicationFallbackHtml(subject, bodyText, payload);
+  const bodyHtml = communicationIsVacationApprovedTemplate(template)
+    ? rawBodyHtml
+    : communicationInjectManualComplement(rawBodyHtml, payload);
+  return { payload, subject, bodyText, bodyHtml };
+}
+
+function communicationChannelLabel(template) {
+  const raw = String(template?.delivery_channel || "").trim();
+  if (!raw) return "E-mail + App";
+  if (normalizeText(raw).includes("APP") && normalizeText(raw).includes("EMAIL")) return "E-mail + App";
+  if (normalizeText(raw).includes("APP")) return "App";
+  if (normalizeText(raw).includes("EMAIL")) return "E-mail";
+  return raw;
+}
+
 function communicationQueueRows() {
   const query = normalizeText(state.communicationQueueQuery);
   return emailReviewEvents
@@ -6144,12 +8111,12 @@ function communicationSentRows() {
     .slice(0, 20);
 }
 
-function communicationTemplateRows() {
-  const query = normalizeText(state.communicationTemplateQuery);
+function communicationTemplateRows(queryValue = state.communicationTemplateQuery) {
+  const query = normalizeText(queryValue);
   return emailTemplateRows
     .filter((template) => template.is_active !== false)
     .filter((template) => communicationTemplateMatches(template, query))
-    .sort((a, b) => a.template_key.localeCompare(b.template_key, "pt-BR"))
+    .sort((a, b) => communicationTemplateFriendlyName(a).localeCompare(communicationTemplateFriendlyName(b), "pt-BR"))
     .slice(0, 80);
 }
 
@@ -6209,7 +8176,7 @@ function communicationSentTable() {
 
 function communicationTemplatesTable() {
   const rows = communicationTemplateRows();
-  return `<div class="card table-wrap communication-panel">
+  return `<div class="card table-wrap communication-panel communication-template-table">
     <div class="section-title communication-table-title">
       <div><h2>Templates disponíveis</h2><p>Modelos ativos de comunicação do RH.</p></div>
       <label class="compact-search"><span>Busca</span><input id="communication-template-search" value="${escapeHtml(state.communicationTemplateQuery)}" placeholder="Palavra-chave do template" /></label>
@@ -6219,7 +8186,7 @@ function communicationTemplatesTable() {
       <tbody>
         ${
           rows.length
-            ? rows.map((template) => `<tr><td><strong>${escapeHtml(template.template_key)}</strong><br><span>${escapeHtml(template.subject_template || "")}</span></td><td>${escapeHtml(template.module_name || "NÃO ENCONTRADO")}</td><td>${escapeHtml(template.template_key || "NÃO ENCONTRADO")}</td><td>${escapeHtml(template.audience_scope || template.recipient_type || "NÃO ENCONTRADO")}</td><td>${escapeHtml(template.delivery_channel || "NÃO ENCONTRADO")}</td></tr>`).join("")
+            ? rows.map((template) => `<tr><td><strong>${escapeHtml(communicationTemplateFriendlyName(template))}</strong><br><span>${escapeHtml(template.subject_template || "")}</span></td><td>${escapeHtml(template.module_name || "NÃO ENCONTRADO")}</td><td>${escapeHtml(template.event_type || communicationTemplateFriendlyName(template))}</td><td>${escapeHtml(template.audience_scope || template.recipient_type || "NÃO ENCONTRADO")}</td><td>${escapeHtml(communicationChannelLabel(template))}</td></tr>`).join("")
             : `<tr><td colspan="5"><div class="empty">Nenhum template encontrado.</div></td></tr>`
         }
       </tbody>
@@ -6227,51 +8194,547 @@ function communicationTemplatesTable() {
   </div>`;
 }
 
-function communicationModal() {
-  const templateOptions = emailTemplateRows.filter((template) => template.is_active !== false);
-  const employeeOptions = communicationEmployeeOptions();
-  const selectedEmployee = selectedCommunicationEmployee();
-  const selectedTemplate = selectedCommunicationTemplate();
-  return `<div class="modal-backdrop">
-    <form class="modal card pad communication-modal" id="communication-form">
-      <div class="section-title">
-        <div><h2>Novo comunicado</h2><p>Selecione template, destinatário e regra de envio.</p></div>
-        <button class="btn small" type="button" data-communication-modal-close>Cancelar</button>
-      </div>
-      <div class="form-grid">
-        <label class="form-field full"><span>Buscar template por palavra-chave</span><input id="communication-template-query" value="${escapeHtml(state.communicationTemplateQuery)}" placeholder="Ex.: férias, ponto, comunicado" /></label>
-        <label class="form-field full"><span>Template</span><select id="communication-template-select" name="templateKey" required>
-          ${templateOptions.map((template) => `<option value="${escapeHtml(template.template_key)}" ${template.template_key === (state.communicationTemplateKey || selectedTemplate?.template_key) ? "selected" : ""}>${escapeHtml(communicationTemplateLabel(template))}</option>`).join("")}
-        </select></label>
-        <label class="form-field full"><span>Buscar colaborador por nome</span><input id="communication-recipient-query" value="${escapeHtml(state.communicationRecipientQuery)}" placeholder="Nome, empresa ou e-mail" /></label>
-        <label class="form-field full"><span>Colaborador</span><select id="communication-employee-select" name="employeeId" required>
-          <option value="">Selecione</option>
-          ${employeeOptions.map((employee) => `<option value="${employee.dbId || employee.id}" ${employee.dbId === state.communicationEmployeeId || employee.id === state.communicationEmployeeId ? "selected" : ""}>${escapeHtml(employee.name)} · ${escapeHtml(employee.company)} · ${escapeHtml(employee.email || "sem e-mail")}</option>`).join("")}
-        </select></label>
-        <label class="form-field"><span>Recorrência</span><select id="communication-recurrence" name="recurrence">
-          ${[["unico", "Único"], ["semanal", "Semanal"], ["quinzenal", "Quinzenal"], ["mensal", "Mensal"]].map(([value, label]) => `<option value="${value}" ${state.communicationRecurrence === value ? "selected" : ""}>${label}</option>`).join("")}
-        </select></label>
-        <label class="form-field"><span>Agendar envio</span><span class="check-inline"><input id="communication-schedule-enabled" type="checkbox" ${state.communicationScheduleEnabled ? "checked" : ""} /> Usar data/hora</span></label>
-        <label class="form-field"><span>Data/hora</span><input id="communication-scheduled-at" type="datetime-local" value="${escapeHtml(state.communicationScheduledAt)}" ${state.communicationScheduleEnabled ? "" : "disabled"} /></label>
-        <label class="form-field"><span>Prazo</span><input id="communication-deadline" value="${escapeHtml(state.communicationDeadline)}" placeholder="Ex.: até sexta-feira" /></label>
-        <label class="form-field full"><span>Observação/complemento</span><textarea id="communication-note" rows="4" placeholder="Texto livre para entrar no payload do comunicado.">${escapeHtml(state.communicationNote)}</textarea></label>
-      </div>
-      <div class="email-preview-card communication-preview">
-        <div class="preview-header"><span>Recursos Humanos · Grupo Prodelar</span><strong>${escapeHtml(selectedTemplate?.subject_template || selectedTemplate?.template_key || "Template")}</strong></div>
-        <div class="preview-body">
-          <p>Para: <strong>${escapeHtml(selectedEmployee?.name || "Selecione um colaborador")}</strong></p>
-          <p>${escapeHtml(selectedEmployee ? `${selectedEmployee.company} · ${selectedEmployee.email || "sem e-mail"}` : "A prévia será completada ao selecionar o destinatário.")}</p>
-        </div>
-      </div>
-      <div class="form-actions full">
-        <button class="btn" type="button" data-communication-modal-close>Cancelar</button>
-        <button class="btn primary" type="submit">Enviar comunicado →</button>
-      </div>
-    </form>
+function communicationTemplatesGallery() {
+  const rows = communicationTemplateRows(state.communicationGalleryQuery);
+  return `<div class="card pad communication-panel">
+    <div class="section-title communication-table-title flush-title">
+      <div><h2>Templates disponíveis</h2><p>Modelos ativos com nomes usuais. Busque por tema, assunto, corpo, módulo ou palavra-chave.</p></div>
+      <label class="compact-search"><span>Localizar</span><input id="communication-template-search" value="${escapeHtml(state.communicationGalleryQuery)}" placeholder="Férias, ponto, admissão, ASO, aniversário..." /></label>
+    </div>
+    <div class="communication-template-grid">
+      ${
+        rows.length
+          ? rows.map((template) => {
+              const topics = communicationTemplateTopicLabels(template);
+              const requiresReview = communicationTemplateRequiresReview(template);
+              return `<article class="communication-template-card">
+                <div>
+                  <div class="communication-template-tags">
+                    ${topics.map((topic) => `<span>${escapeHtml(topic)}</span>`).join("")}
+                    ${requiresReview ? `<span class="sensitive">Revisão</span>` : ""}
+                  </div>
+                  <h3>${escapeHtml(communicationTemplateFriendlyName(template))}</h3>
+                  <p>${escapeHtml(template.subject_template || template.body_template || "Modelo de comunicação RH")}</p>
+                </div>
+                <div class="communication-template-footer">
+                  <small>${escapeHtml(communicationChannelLabel(template))} · ${escapeHtml(template.audience_scope || template.recipient_type || "público padrão")}</small>
+                  <button class="btn small" type="button" data-communication-use-template="${escapeHtml(template.template_key)}">Usar modelo</button>
+                </div>
+              </article>`;
+            }).join("")
+          : `<div class="empty">Nenhum template encontrado para esta busca.</div>`
+      }
+    </div>
   </div>`;
 }
 
+function communicationStartPanel() {
+  return `<div class="card pad communication-start-panel">
+    <div>
+      <h2>Nova comunicação</h2>
+      <p>Abra o fluxo guiado para escolher canal, empresa, público, template e revisar a versão final.</p>
+    </div>
+    <div class="communication-start-actions">
+      <button class="btn primary" type="button" data-communication-new>+ Nova comunicação</button>
+    </div>
+  </div>`;
+}
+
+function communicationModal() {
+  const templateOptions = state.communicationTemplateQuery ? communicationTemplateRows(state.communicationTemplateQuery) : [];
+  const audienceOptions = communicationAudienceOptionRows();
+  const selectedTargets = selectedCommunicationTargets();
+  const selectedEmployee = selectedCommunicationPreviewEmployee();
+  const selectedTemplate = selectedCommunicationTemplate();
+  const delivery = selectedTargets.length
+    ? communicationAudienceDelivery(selectedTemplate, selectedTargets)
+    : { label: "Selecione o público" };
+  const finalPreview = communicationFinalPreview(selectedTemplate, selectedEmployee);
+  const selectedCompany = communicationSelectedCompany();
+  const companyButtons = communicationCompanyChoices();
+  const targetSummaryTitle = state.communicationAudience === "all"
+    ? (selectedCompany === "Todas" ? "Todos os colaboradores ativos" : `Todos da ${selectedCompany}`)
+    : state.communicationAudience === "employee"
+      ? selectedCommunicationEmployee()?.name
+      : state.communicationAudienceValue;
+  const targetSummaryDetail = state.communicationAudience === "employee"
+    ? selectedCommunicationEmployee()
+      ? `${selectedCommunicationEmployee().company} · ${selectedCommunicationEmployee().department || "Sem setor"} · ${employeeEmailForDelivery(selectedCommunicationEmployee()) || "sem e-mail válido"}`
+      : ""
+    : `${communicationAudienceLabel()} · ${communicationCompanyLabel()} · ${selectedTargets.length} destinatário${selectedTargets.length === 1 ? "" : "s"}`;
+  const shouldShowTargetSearch = state.communicationAudience !== "all" && !targetSummaryTitle;
+  const shouldShowTemplateSearch = !selectedTemplate;
+  const appWillBeUsed = Boolean(selectedTemplate) && selectedTargets.some((employee) => communicationDeliveryChannel(selectedTemplate, employee).app);
+  const appPreviewText = !selectedTemplate
+    ? "Escolha um template para visualizar o card que será publicado no app."
+    : appWillBeUsed
+      ? finalPreview.bodyText || finalPreview.payload.observacao || "Comunicado do RH"
+      : "Somente e-mail: não será criado card no app.";
+  const templatePreviewHtml = selectedTemplate
+    ? `<iframe class="communication-final-frame" title="Versão final do comunicado" sandbox="" srcdoc="${escapeHtml(finalPreview.bodyHtml)}"></iframe>`
+    : `<div class="communication-final-placeholder"><strong>Selecione um template</strong><span>A prévia final aparece aqui antes do envio.</span></div>`;
+  return `<form class="card pad communication-composer communication-compose-screen" id="communication-form">
+    <div class="section-title">
+      <div><h2>Nova comunicação</h2><p>Escolha canal, empresa, público, template e revise a versão final antes do envio.</p></div>
+      <button class="btn small" type="button" data-communication-modal-close>Voltar à Central</button>
+    </div>
+    <div class="communication-composer-grid">
+      <div class="communication-composer-fields">
+        <div class="communication-step">
+          <strong>1. Canal</strong>
+          <span>Se o colaborador não tiver e-mail, o comunicado segue pelo app.</span>
+        </div>
+        <div class="communication-segmented" role="group" aria-label="Canal de envio">
+          ${[["both", "E-mail + App"], ["email", "Só e-mail"], ["app", "Só app"]]
+            .map(([value, label]) => `<button type="button" class="${state.communicationChannel === value ? "active" : ""}" data-communication-channel="${value}">${label}</button>`)
+            .join("")}
+        </div>
+        <div class="communication-step">
+          <strong>2. Público</strong>
+          <span>Selecione a empresa primeiro. Depois escolha colaborador, todos, setor, cargo ou perfil.</span>
+        </div>
+        <div class="communication-substep-label">Empresa</div>
+        <div class="communication-audience-grid communication-company-grid">
+          ${companyButtons.map(([value, label, detail]) => `<button type="button" class="${selectedCompany === value ? "active" : ""}" data-communication-company="${escapeHtml(value)}">
+            <strong>${escapeHtml(label)}</strong>
+            <span>${escapeHtml(detail)}</span>
+          </button>`).join("")}
+        </div>
+        <div class="communication-substep-label">Escopo</div>
+        <div class="communication-audience-grid">
+          ${communicationAudienceChoices().map(([value, label, detail]) => `<button type="button" class="${state.communicationAudience === value ? "active" : ""}" data-communication-audience="${value}">
+            <strong>${escapeHtml(label)}</strong>
+            <span>${escapeHtml(detail)}</span>
+          </button>`).join("")}
+        </div>
+        ${
+          targetSummaryTitle
+            ? `<div class="communication-selected-summary">
+                <div><strong>${escapeHtml(targetSummaryTitle)}</strong><span>${escapeHtml(targetSummaryDetail || communicationCompanyLabel())}</span></div>
+                ${state.communicationAudience === "all" ? "" : `<button class="btn small" type="button" data-communication-change-audience>Trocar</button>`}
+              </div>`
+            : ""
+        }
+        ${
+          shouldShowTargetSearch
+            ? `<label class="form-field full"><span>Localizar ${escapeHtml(communicationAudienceLabel().toLowerCase())} em ${escapeHtml(communicationCompanyLabel())}</span><input id="communication-recipient-query" value="${escapeHtml(state.communicationRecipientQuery)}" placeholder="Digite nome, setor, cargo, perfil ou e-mail" /></label>
+              <div class="communication-picker-list full">
+                ${
+                  audienceOptions.length
+                    ? audienceOptions.slice(0, 12).map((option) => `<button type="button" class="communication-picker" data-communication-pick-audience="${escapeHtml(option.key)}">
+                        <strong>${escapeHtml(option.title)}</strong>
+                        <span>${escapeHtml(option.detail)}</span>
+                        <small>${escapeHtml(option.meta)}</small>
+                      </button>`).join("")
+                    : `<div class="empty small-empty">Digite para localizar. A lista não fica fixa na tela.</div>`
+                }
+              </div>`
+            : ""
+        }
+        <div class="communication-step">
+          <strong>3. Template</strong>
+          <span>Busque por tema ou nome usual do modelo.</span>
+        </div>
+        ${
+          selectedTemplate
+            ? `<div class="communication-selected-summary">
+                <div><strong>${escapeHtml(communicationTemplateFriendlyName(selectedTemplate))}</strong><span>${escapeHtml(selectedTemplate.subject_template || "Modelo selecionado")}</span></div>
+                <button class="btn small" type="button" data-communication-change-template>Trocar</button>
+              </div>`
+            : ""
+        }
+        ${
+          shouldShowTemplateSearch
+            ? `<label class="form-field full"><span>Localizar template</span><input id="communication-template-query" value="${escapeHtml(state.communicationTemplateQuery)}" placeholder="Digite férias, ponto, ASO, admissão..." /></label>
+              <div class="communication-picker-list full">
+                ${
+                  templateOptions.length
+                    ? templateOptions.slice(0, 8).map((template) => `<button type="button" class="communication-picker" data-communication-pick-template="${escapeHtml(template.template_key)}">
+                        <strong>${escapeHtml(communicationTemplateFriendlyName(template))}</strong>
+                        <span>${escapeHtml(template.subject_template || "Modelo de comunicação RH")}</span>
+                      </button>`).join("")
+                    : `<div class="empty small-empty">Digite para localizar templates. A lista aparece apenas durante a busca.</div>`
+                }
+              </div>`
+            : ""
+        }
+        <div class="communication-step">
+          <strong>4. Complementos</strong>
+          <span>Prazo, agendamento e observação são opcionais.</span>
+        </div>
+        <div class="form-grid compact-form-grid">
+          <label class="form-field"><span>Recorrência</span><select id="communication-recurrence" name="recurrence">
+            ${[["unico", "Único"], ["semanal", "Semanal"], ["quinzenal", "Quinzenal"], ["mensal", "Mensal"]].map(([value, label]) => `<option value="${value}" ${state.communicationRecurrence === value ? "selected" : ""}>${label}</option>`).join("")}
+          </select></label>
+          <label class="form-field"><span>Agendar envio</span><span class="check-inline"><input id="communication-schedule-enabled" type="checkbox" ${state.communicationScheduleEnabled ? "checked" : ""} /> Usar data/hora</span></label>
+          <label class="form-field"><span>Data/hora</span><input id="communication-scheduled-at" type="datetime-local" value="${escapeHtml(state.communicationScheduledAt)}" ${state.communicationScheduleEnabled ? "" : "disabled"} /></label>
+          <label class="form-field"><span>Assunto/título</span><input id="communication-subject" value="${escapeHtml(state.communicationSubject)}" placeholder="Ex.: Comunicado importante do RH" /></label>
+          <label class="form-field"><span>Prazo</span><input id="communication-deadline" value="${escapeHtml(state.communicationDeadline)}" placeholder="Ex.: até sexta-feira" /></label>
+        </div>
+        <label class="form-field full"><span>Observação/complemento</span><textarea id="communication-note" rows="4" placeholder="Texto livre que entra nos campos adicionais do comunicado.">${escapeHtml(state.communicationNote)}</textarea></label>
+      </div>
+      <div class="communication-final">
+        <div class="section-title compact-title">
+          <div><h2>Versão final</h2><p>${escapeHtml(delivery.label || "Selecione o público")}</p></div>
+          ${statusPill(selectedTemplate ? "Pronto" : "Template")}
+        </div>
+        <div class="communication-final-meta">
+          <span><strong>Template</strong>${escapeHtml(selectedTemplate ? communicationTemplateFriendlyName(selectedTemplate) : "Selecione")}</span>
+          <span><strong>Público</strong>${escapeHtml(selectedTargets.length ? `${communicationCompanyLabel()} · ${communicationAudienceLabel()} · ${selectedTargets.length}` : "Selecione")}</span>
+        </div>
+        ${templatePreviewHtml}
+        <div class="app-card-preview ${selectedTemplate ? "" : "muted-preview"}">
+          <strong>Card no app</strong>
+          <span>${escapeHtml(finalPreview.subject || "Aguardando template")}</span>
+          <small>${escapeHtml(appPreviewText)}</small>
+        </div>
+      </div>
+    </div>
+    <div class="form-actions full">
+      <button class="btn" type="button" data-communication-modal-close>Cancelar</button>
+      <button class="btn primary" type="submit" ${selectedTargets.length && selectedTemplate ? "" : "disabled"}>Enviar comunicação →</button>
+    </div>
+  </form>`;
+}
+
+function communicationAudienceSearchPlaceholderV2() {
+  const selectedCompany = communicationCompanyLabel();
+  const placeholders = {
+    employee: `Digite nome, matrícula, cargo ou e-mail em ${selectedCompany}`,
+    department: `Digite setor da ${selectedCompany}`,
+    role: `Digite cargo/função da ${selectedCompany}`,
+    profile: "Digite RH, diretoria, gerente, supervisor ou colaborador",
+  };
+  return placeholders[state.communicationAudience] || `Digite para localizar em ${selectedCompany}`;
+}
+
+function communicationAudienceOptionListHtmlV2() {
+  const options = communicationAudienceOptionRows();
+  if (state.communicationAudience === "all") return "";
+  return `<div class="communication-results" id="communication-recipient-results">
+    ${
+      options.length
+        ? options.slice(0, 16).map((option) => `<button type="button" class="communication-result-row" data-communication-pick-audience="${escapeHtml(option.key)}">
+            <span class="communication-result-main">
+              <strong>${escapeHtml(option.title)}</strong>
+              <small>${escapeHtml(option.detail)}</small>
+            </span>
+            <span class="communication-result-meta">${escapeHtml(option.meta || `${option.count || 1} destino`)}</span>
+          </button>`).join("")
+        : `<div class="communication-empty-result">Digite para localizar. A lista aparece aqui sem desmontar a tela.</div>`
+    }
+  </div>`;
+}
+
+function communicationTemplateOptionListHtmlV2() {
+  const rows = state.communicationTemplateQuery ? communicationTemplateRows(state.communicationTemplateQuery) : [];
+  const emptyMessage = !hasCommunicationTemplates()
+    ? "Templates ainda não carregados. Clique em Atualizar ou aguarde a leitura do Supabase."
+    : state.communicationTemplateQuery
+      ? "Nenhum template encontrado para esta busca."
+      : "Digite férias, ponto, ASO, admissão ou outra palavra do assunto/corpo.";
+  return `<div class="communication-results" id="communication-template-results">
+    ${
+      rows.length
+        ? rows.slice(0, 12).map((template) => {
+            const topics = communicationTemplateTopicLabels(template);
+            return `<button type="button" class="communication-result-row" data-communication-pick-template="${escapeHtml(template.template_key)}">
+              <span class="communication-result-main">
+                <strong>${escapeHtml(communicationTemplateFriendlyName(template))}</strong>
+                <small>${escapeHtml(template.subject_template || "Modelo de comunicação RH")}</small>
+              </span>
+              <span class="communication-result-meta">${topics.map(escapeHtml).join(" · ")}</span>
+            </button>`;
+          }).join("")
+        : `<div class="communication-empty-result">${escapeHtml(emptyMessage)}</div>`
+    }
+  </div>`;
+}
+
+function updateCommunicationRecipientResults() {
+  const container = document.querySelector("#communication-recipient-results");
+  if (!container) return;
+  const wrapper = document.createElement("div");
+  wrapper.innerHTML = communicationAudienceOptionListHtmlV2();
+  const replacement = wrapper.firstElementChild;
+  if (replacement) container.replaceWith(replacement);
+}
+
+function updateCommunicationTemplateResults() {
+  const container = document.querySelector("#communication-template-results");
+  if (!container) return;
+  const wrapper = document.createElement("div");
+  wrapper.innerHTML = communicationTemplateOptionListHtmlV2();
+  const replacement = wrapper.firstElementChild;
+  if (replacement) container.replaceWith(replacement);
+}
+
+async function refreshCommunicationTemplatesIfMissing() {
+  if (hasCommunicationTemplates()) return true;
+  if (!supabaseClient) {
+    state.communicationMessage = "Supabase Auth indisponível: não foi possível carregar templates.";
+    renderPage();
+    return false;
+  }
+  state.communicationMessage = "Carregando templates de comunicação...";
+  updateCommunicationTemplateResults();
+  updateCommunicationPreviewOnly();
+  try {
+    await loadSupabaseData();
+    if (hasCommunicationTemplates()) {
+      if (state.communicationMessage === "Carregando templates de comunicação...") state.communicationMessage = "";
+      renderPage();
+      return true;
+    }
+    state.communicationMessage = "Templates não carregados. Clique em Atualizar para consultar o Supabase novamente.";
+    renderPage();
+    return false;
+  } catch (error) {
+    state.communicationMessage = `Não foi possível carregar templates: ${error.message}`;
+    renderPage();
+    return false;
+  }
+}
+
+function communicationPreviewPanelInnerHtmlV2() {
+  const selectedTargets = selectedCommunicationTargets();
+  const selectedEmployee = selectedCommunicationPreviewEmployee();
+  const selectedTemplate = selectedCommunicationTemplate();
+  const delivery = selectedTargets.length
+    ? communicationAudienceDelivery(selectedTemplate, selectedTargets)
+    : { label: "Selecione o público" };
+  const finalPreview = communicationFinalPreview(selectedTemplate, selectedEmployee);
+  const appWillBeUsed = Boolean(selectedTemplate) && selectedTargets.some((employee) => communicationDeliveryChannel(selectedTemplate, employee).app);
+  const appCard = communicationAppCardContent(selectedTemplate, finalPreview.payload, finalPreview.subject);
+  const appPreviewText = !selectedTemplate
+    ? appCard.body
+    : appWillBeUsed
+      ? appCard.body
+      : "Somente e-mail: não será criado card no app.";
+  const templatePreviewHtml = selectedTemplate
+    ? `<iframe class="communication-final-frame" title="Versão final do comunicado" sandbox="" srcdoc="${escapeHtml(finalPreview.bodyHtml)}"></iframe>`
+    : `<div class="communication-final-placeholder"><strong>Selecione um template</strong><span>A versão final aparecerá aqui antes do envio.</span></div>`;
+
+  return `<div class="section-title compact-title">
+      <div><h2>Versão final</h2><p>${escapeHtml(delivery.label || "Selecione o público")}</p></div>
+      ${statusPill(selectedTemplate && selectedTargets.length ? "Pronto" : "Aguardando")}
+    </div>
+    <div class="communication-final-meta">
+      <span><strong>Template</strong>${escapeHtml(selectedTemplate ? communicationTemplateFriendlyName(selectedTemplate) : "Selecione")}</span>
+      <span><strong>Público</strong>${escapeHtml(selectedTargets.length ? `${communicationCompanyLabel()} · ${communicationAudienceLabel()} · ${selectedTargets.length}` : "Selecione")}</span>
+    </div>
+    ${templatePreviewHtml}
+    <div class="app-card-preview ${selectedTemplate ? "" : "muted-preview"}">
+      <strong>Card no app</strong>
+      <span>${escapeHtml(appWillBeUsed ? appCard.title : "Sem card no app")}</span>
+      <small>${escapeHtml(appPreviewText)}</small>
+    </div>
+    <div class="communication-submit-bar">
+      <button class="btn" type="button" data-communication-modal-close>Cancelar</button>
+      <button class="btn primary" type="submit" ${selectedTargets.length && selectedTemplate ? "" : "disabled"}>Enviar comunicação</button>
+    </div>`;
+}
+
+function updateCommunicationPreviewOnly() {
+  const container = document.querySelector("[data-communication-preview-panel]");
+  if (!container) return;
+  container.innerHTML = communicationPreviewPanelInnerHtmlV2();
+}
+
+function communicationDraftValidation() {
+  if (!canSendAnnouncements()) {
+    return { ok: false, message: "Seu perfil não tem permissão para enviar comunicados." };
+  }
+  if (!supabaseClient) {
+    return { ok: false, message: "Supabase indisponível para criar comunicado." };
+  }
+  const targets = selectedCommunicationTargets();
+  const template = selectedCommunicationTemplate();
+  if (!template) return { ok: false, message: "Selecione um template antes de enviar." };
+  if (!targets.length) return { ok: false, message: "Selecione um colaborador ou grupo antes de enviar." };
+  if (state.communicationScheduleEnabled && !state.communicationScheduledAt) {
+    return { ok: false, message: "Informe a data/hora para agendar o envio." };
+  }
+  return { ok: true, targets, template };
+}
+
+function communicationScheduledForIso() {
+  if (state.communicationScheduleEnabled && state.communicationScheduledAt) {
+    return new Date(state.communicationScheduledAt).toISOString();
+  }
+  return new Date().toISOString();
+}
+
+function communicationConfirmModal() {
+  if (!state.communicationConfirmOpen) return "";
+  const validation = communicationDraftValidation();
+  if (!validation.ok) return "";
+  const { targets, template } = validation;
+  const selectedEmployee = selectedCommunicationPreviewEmployee();
+  const finalPreview = communicationFinalPreview(template, selectedEmployee);
+  const delivery = communicationAudienceDelivery(template, targets);
+  const scheduledLabel = state.communicationScheduleEnabled
+    ? `Agendado para ${formatDateTime(communicationScheduledForIso())}`
+    : "Envio imediato";
+  return `<div class="modal-backdrop communication-confirm-backdrop" role="dialog" aria-modal="true" aria-label="Confirmar envio da comunicação">
+    <div class="modal card pad communication-confirm-modal">
+      <div class="section-title">
+        <div>
+          <h2>Confirmar envio</h2>
+          <p>Revise a comunicação final. Esta operação não poderá ser desfeita após confirmar.</p>
+        </div>
+        ${statusPill(state.communicationScheduleEnabled ? "Agendado" : "Envio imediato")}
+      </div>
+      <div class="communication-confirm-grid">
+        <div class="communication-confirm-summary">
+          <div><span>Template</span><strong>${escapeHtml(communicationTemplateFriendlyName(template))}</strong></div>
+          <div><span>Público</span><strong>${escapeHtml(`${communicationCompanyLabel()} · ${communicationAudienceLabel()} · ${targets.length} destinatário${targets.length === 1 ? "" : "s"}`)}</strong></div>
+          <div><span>Canais</span><strong>${escapeHtml(delivery.label)}</strong></div>
+          <div><span>Quando</span><strong>${escapeHtml(scheduledLabel)}</strong></div>
+          ${delivery.missingEmail ? `<div class="warn"><span>Aviso</span><strong>${delivery.missingEmail} destinatário${delivery.missingEmail === 1 ? "" : "s"} sem e-mail válido seguirão pelo app.</strong></div>` : ""}
+        </div>
+        <iframe class="communication-confirm-frame" title="Prévia final antes do envio" sandbox="" srcdoc="${escapeHtml(finalPreview.bodyHtml)}"></iframe>
+      </div>
+      <div class="communication-submit-bar">
+        <button class="btn" type="button" data-communication-confirm-cancel>Voltar e editar</button>
+        <button class="btn primary" type="button" data-communication-confirm-send>${state.communicationScheduleEnabled ? "Confirmar agendamento" : "Confirmar e enviar"}</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function communicationModalV2() {
+  const selectedTargets = selectedCommunicationTargets();
+  const selectedTemplate = selectedCommunicationTemplate();
+  const selectedCompany = communicationSelectedCompany();
+  const companyButtons = communicationCompanyChoices();
+  const selectedEmployee = selectedCommunicationEmployee();
+  const targetSummaryTitle = state.communicationAudience === "all"
+    ? (selectedCompany === "Todas" ? "Todos os colaboradores ativos" : `Todos da ${selectedCompany}`)
+    : state.communicationAudience === "employee"
+      ? selectedEmployee?.name
+      : state.communicationAudienceValue;
+  const targetSummaryDetail = state.communicationAudience === "employee"
+    ? selectedEmployee
+      ? `${selectedEmployee.company} · ${selectedEmployee.department || "Sem setor"} · ${employeeEmailForDelivery(selectedEmployee) || "sem e-mail válido: segue pelo app"}`
+      : ""
+    : `${communicationAudienceLabel()} · ${communicationCompanyLabel()} · ${selectedTargets.length} destinatário${selectedTargets.length === 1 ? "" : "s"}`;
+  const shouldShowTargetSearch = state.communicationAudience !== "all" && !targetSummaryTitle;
+
+  return `<form class="card pad communication-composer communication-compose-screen" id="communication-form">
+    <div class="section-title">
+      <div><h2>Nova comunicação</h2><p>Escolha canal, empresa, público, template e revise a versão final antes do envio.</p></div>
+      <button class="btn small" type="button" data-communication-modal-close>Voltar à Central</button>
+    </div>
+    <div class="communication-workbench">
+      <div class="communication-flow">
+        <section class="communication-step-card">
+          <div class="communication-step">
+            <strong>1. Canal</strong>
+            <span>Se o colaborador não tiver e-mail válido, o comunicado segue pelo app.</span>
+          </div>
+          <div class="communication-segmented" role="group" aria-label="Canal de envio">
+            ${[["both", "E-mail + App"], ["email", "Só e-mail"], ["app", "Só app"]]
+              .map(([value, label]) => `<button type="button" class="${state.communicationChannel === value ? "active" : ""}" data-communication-channel="${value}">${label}</button>`)
+              .join("")}
+          </div>
+        </section>
+
+        <section class="communication-step-card">
+          <div class="communication-step">
+            <strong>2. Público</strong>
+            <span>Primeiro filtre a empresa. Depois escolha colaborador, todos, setor, cargo ou perfil.</span>
+          </div>
+          <div class="communication-substep-label">Empresa</div>
+          <div class="communication-audience-grid communication-company-grid">
+            ${companyButtons.map(([value, label, detail]) => `<button type="button" class="${selectedCompany === value ? "active" : ""}" data-communication-company="${escapeHtml(value)}">
+              <strong>${escapeHtml(label)}</strong>
+              <span>${escapeHtml(detail)}</span>
+            </button>`).join("")}
+          </div>
+          <div class="communication-substep-label">Quem recebe</div>
+          <div class="communication-audience-grid">
+            ${communicationAudienceChoices().map(([value, label, detail]) => `<button type="button" class="${state.communicationAudience === value ? "active" : ""}" data-communication-audience="${value}">
+              <strong>${escapeHtml(label)}</strong>
+              <span>${escapeHtml(detail)}</span>
+            </button>`).join("")}
+          </div>
+          ${
+            targetSummaryTitle
+              ? `<div class="communication-selected-summary">
+                  <div><strong>${escapeHtml(targetSummaryTitle)}</strong><span>${escapeHtml(targetSummaryDetail || communicationCompanyLabel())}</span></div>
+                  ${state.communicationAudience === "all" ? "" : `<button class="btn small" type="button" data-communication-change-audience>Trocar</button>`}
+                </div>`
+              : ""
+          }
+          ${
+            shouldShowTargetSearch
+              ? `<label class="form-field full"><span>Localizar ${escapeHtml(communicationAudienceLabel().toLowerCase())}</span><input id="communication-recipient-query" value="${escapeHtml(state.communicationRecipientQuery)}" placeholder="${escapeHtml(communicationAudienceSearchPlaceholderV2())}" autocomplete="off" /></label>
+                ${communicationAudienceOptionListHtmlV2()}`
+              : ""
+          }
+        </section>
+
+        <section class="communication-step-card">
+          <div class="communication-step">
+            <strong>3. Template</strong>
+            <span>Busque por tema, nome usual, assunto ou texto do comunicado.</span>
+          </div>
+          ${
+            selectedTemplate
+              ? `<div class="communication-selected-summary">
+                  <div><strong>${escapeHtml(communicationTemplateFriendlyName(selectedTemplate))}</strong><span>${escapeHtml(selectedTemplate.subject_template || "Modelo selecionado")}</span></div>
+                  <button class="btn small" type="button" data-communication-change-template>Trocar</button>
+                </div>`
+              : `<label class="form-field full"><span>Localizar template</span><input id="communication-template-query" value="${escapeHtml(state.communicationTemplateQuery)}" placeholder="Digite férias, ponto, ASO, admissão, aniversário..." autocomplete="off" /></label>
+                ${communicationTemplateOptionListHtmlV2()}`
+          }
+        </section>
+
+        <section class="communication-step-card">
+          <div class="communication-step">
+            <strong>4. Complementos</strong>
+            <span>Prazo, agendamento e observação são opcionais.</span>
+          </div>
+          <div class="form-grid compact-form-grid">
+            <label class="form-field"><span>Recorrência</span><select id="communication-recurrence" name="recurrence">
+              ${[["unico", "Único"], ["semanal", "Semanal"], ["quinzenal", "Quinzenal"], ["mensal", "Mensal"]].map(([value, label]) => `<option value="${value}" ${state.communicationRecurrence === value ? "selected" : ""}>${label}</option>`).join("")}
+            </select></label>
+            <label class="form-field communication-schedule-field"><span>Agendamento</span><span class="check-inline compact-check"><input id="communication-schedule-enabled" type="checkbox" ${state.communicationScheduleEnabled ? "checked" : ""} /> Agendar envio</span></label>
+            ${
+              state.communicationScheduleEnabled
+                ? `<label class="form-field"><span>Data/hora</span><input id="communication-scheduled-at" type="datetime-local" value="${escapeHtml(state.communicationScheduledAt)}" /></label>`
+                : ""
+            }
+            <label class="form-field"><span>Prazo</span><input id="communication-deadline" value="${escapeHtml(state.communicationDeadline)}" placeholder="Ex.: até sexta-feira" autocomplete="off" /></label>
+          </div>
+          <label class="form-field full"><span>Observação/complemento</span><textarea id="communication-note" rows="4" placeholder="Texto livre que entra nos campos adicionais do comunicado.">${escapeHtml(state.communicationNote)}</textarea></label>
+        </section>
+      </div>
+      <aside class="communication-final" data-communication-preview-panel>
+        ${communicationPreviewPanelInnerHtmlV2()}
+      </aside>
+    </div>
+  </form>`;
+}
+
 function emailsPage() {
+  if (state.communicationModalOpen) {
+    return `
+      <div class="communication-header">
+        <div>
+          <h2>Central de Comunicação RH</h2>
+          <p>Nova comunicação manual com envio por e-mail, app ou ambos.</p>
+        </div>
+        <div class="header-actions">
+          <button class="btn" data-communication-modal-close>Voltar</button>
+        </div>
+      </div>
+      ${state.communicationMessage ? `<div class="notice form-notice"><strong>Retorno</strong><p>${escapeHtml(state.communicationMessage)}</p></div>` : ""}
+      <div class="communication-status-grid">${communicationStatusCards()}</div>
+      ${communicationModalV2()}
+      ${communicationConfirmModal()}`;
+  }
   return `
     <div class="communication-header">
       <div>
@@ -6279,20 +8742,23 @@ function emailsPage() {
         <p>Controle de fila, templates, revisão, agendamentos e comunicados avulsos.</p>
       </div>
       <div class="header-actions">
-        <button class="btn primary" data-communication-new>+ Novo comunicado</button>
         <button class="btn" data-communication-refresh>Atualizar</button>
       </div>
     </div>
     ${state.communicationMessage ? `<div class="notice form-notice"><strong>Retorno</strong><p>${escapeHtml(state.communicationMessage)}</p></div>` : ""}
     <div class="communication-status-grid">${communicationStatusCards()}</div>
+    ${communicationStartPanel()}
+    ${communicationTemplatesGallery()}
     ${communicationQueueTable()}
-    ${communicationSentTable()}
-    ${communicationTemplatesTable()}
-    ${state.communicationModalOpen ? communicationModal() : ""}`;
+    ${communicationSentTable()}`;
 }
 
 function canSendAnnouncements() {
   return ["RH", "Diretoria"].includes(currentUser.profile);
+}
+
+function canManageRhOperations() {
+  return currentUser.profile === "RH" || isImpersonationAdmin();
 }
 
 function announcementEmployeeOptions() {
@@ -6381,11 +8847,20 @@ function renderEmailTemplateValue(templateValue, payload = {}) {
 }
 
 function emailReviewPreview(event) {
-  const payload = event.payload && typeof event.payload === "object" ? event.payload : {};
+  const rawPayload = event.payload && typeof event.payload === "object" ? event.payload : {};
+  const logoUrl = companyEmailLogoUrl(rawPayload.empresa || rawPayload.company || event.company_name || "");
+  const payload = {
+    ...rawPayload,
+    empresa_logo_url: logoUrl,
+    company_logo_url: logoUrl,
+    logo_url: logoUrl,
+  };
   const template = emailTemplateFor(event.template_key);
   const subject = event.subject || renderEmailTemplateValue(template?.subject_template || event.template_key || "Sem assunto", payload);
   const bodyText = renderEmailTemplateValue(template?.body_template || payload.mensagem || payload.motivo || "", payload);
-  const bodyHtml = template?.body_html_template ? renderEmailTemplateValue(template.body_html_template, payload) : "";
+  const bodyHtml = template?.body_html_template
+    ? communicationInjectManualComplement(renderEmailTemplateValue(template.body_html_template, payload).replace(/\\n/g, "<br>"), payload)
+    : "";
   return { subject, bodyText, bodyHtml };
 }
 
@@ -6471,16 +8946,17 @@ function authPage() {
         <div>
           <p class="eyebrow">Recursos Humanos</p>
           <h1>Entrar no portal</h1>
-          <p>Use CPF cadastrado ou e-mail corporativo e a senha do Supabase Auth.</p>
+          <p>Use seu usuário de acesso, CPF ou e-mail corporativo.</p>
         </div>
         ${authMessageMarkup()}
         <form id="login-form" class="auth-form">
-          <label><span>CPF ou e-mail</span><input name="cpf" autocomplete="username" placeholder="CPF ou e-mail" required /></label>
+          <label><span>Usuário, CPF ou e-mail</span><input name="cpf" autocomplete="username" placeholder="Ex.: ana, joao, CPF ou e-mail" required /></label>
           <label><span>Senha</span><input name="password" type="password" autocomplete="current-password" placeholder="Senha" required /></label>
           <button class="btn primary" type="submit">Entrar</button>
         </form>
         <div class="auth-note">
-          <strong>Acesso de teste:</strong> use os usuários criados no Supabase Auth, como rh@teste.prodelar.
+          <strong>Senha inicial:</strong> 123456.
+          <a class="auth-reset-link" href="mailto:rh@grupoprodelar.com.br?subject=Reset%20de%20senha%20-%20Portal%20RH">Solicitar reset ao RH</a>
         </div>
       </section>
     </main>`;
@@ -6548,13 +9024,26 @@ const pageRenderers = {
   hierarchy: hierarchyPage,
   paystubs: paystubsPage,
   emails: emailsPage,
-  announcement: announcementPage,
+  announcement: emailsPage,
   emailReview: emailReviewPage,
 };
 
 function renderPage() {
   ensureRuntimeIndexes();
   renderMemo = {};
+  if (getUrlPage() === "admissionCandidate") {
+    const token = new URL(window.location.href).searchParams.get("token") || "";
+    removeTestSwitcher();
+    removeImpersonationBar();
+    if (token && state.publicAdmissionToken !== token) {
+      state.publicAdmissionToken = token;
+      state.publicAdmissionCandidate = admissionCandidateByToken(token);
+      state.publicAdmissionMessage = "";
+      void loadPublicAdmissionCandidate(token);
+    }
+    commitAppHtml(admissionCandidatePage(), bindAdmissionCandidate);
+    return;
+  }
   if (!state.authChecked) {
     removeTestSwitcher();
     removeImpersonationBar();
@@ -6660,7 +9149,28 @@ function saveVacationEdit(key, patch) {
   localStorage.setItem("rhVacationEdits", JSON.stringify(saved));
 }
 
-function submitVacationForReview(key) {
+function focusVacationEdit(key) {
+  const input = Array.from(document.querySelectorAll("[data-vacation-start]")).find(
+    (field) => field.dataset.vacationStart === key,
+  );
+  if (!input) return;
+  input.focus();
+  input.select?.();
+}
+
+function handleVacationDateEdit(event, field) {
+  const rawValue = event.target.value;
+  const value = normalizeDateInputValue(rawValue);
+  const key = field === "start" ? event.target.dataset.vacationStart : event.target.dataset.vacationEnd;
+  if (!key) return;
+  if (rawValue && !hasCompleteDateInput(rawValue)) return;
+  saveVacationEdit(key, {
+    [field === "start" ? "planned_start" : "planned_end"]: value,
+    submitted_for_review: false,
+  });
+}
+
+async function submitVacationForReview(key) {
   const row = vacationForecasts.find((item) => vacationKey(item) === key);
   if (!row) return;
 
@@ -6682,6 +9192,30 @@ function submitVacationForReview(key) {
     return;
   }
 
+  const submittedAt = new Date().toISOString();
+  if (supabaseClient && row.id) {
+    const { error } = await supabaseClient
+      .from("hr_vacation_periods")
+      .update({
+        planned_start: row.planned_start,
+        planned_end: row.planned_end,
+        status: "waiting_review",
+        raw_import: {
+          ...(row.raw_import || {}),
+          submitted_for_review: true,
+          submitted_by: currentUser.name,
+          submitted_at: submittedAt,
+        },
+      })
+      .eq("id", row.id);
+
+    if (error) {
+      state.vacationMessage = `Programação de ${row.employee_name} não foi gravada no Supabase: ${error.message}`;
+      renderPage();
+      return;
+    }
+  }
+
   const saved = JSON.parse(localStorage.getItem("rhVacationEdits") || "{}");
   saved[key] = {
     ...(saved[key] || {}),
@@ -6690,12 +9224,12 @@ function submitVacationForReview(key) {
     status: "waiting_review",
     submitted_for_review: true,
     submitted_by: currentUser.name,
-    submitted_at: new Date().toISOString(),
+    submitted_at: submittedAt,
   };
   localStorage.setItem("rhVacationEdits", JSON.stringify(saved));
   vacationForecasts = vacationForecasts.map((item) => (vacationKey(item) === key ? { ...item, ...saved[key] } : item));
   markRuntimeIndexesDirty();
-  state.vacationMessage = `Programação de ${row.employee_name} submetida para avaliação.`;
+  state.vacationMessage = `Programação de ${row.employee_name} gravada no Supabase e submetida para avaliação.`;
   const vacationPeriod = `${row.planned_start} a ${row.planned_end}`;
   const vacationChanged = row.status === "edited";
   void recordEmployeeTimeline({
@@ -6707,6 +9241,10 @@ function submitVacationForReview(key) {
     status: vacationChanged ? "alterado" : "aprovado",
     metadata: { vacation_key: key, company: row.company_key || row.source_company || row.company || "" },
   });
+  if (supabaseClient && row.id) {
+    await loadSupabaseData();
+    state.vacationMessage = `Programação de ${row.employee_name} gravada no Supabase e submetida para avaliação.`;
+  }
   renderPage();
 }
 
@@ -6907,15 +9445,38 @@ function goBack() {
   renderPage();
 }
 
-function submitAllVacationChanges() {
+async function submitAllVacationChanges() {
   const activeCompany = state.company || "Todas";
   const keys = vacationForecasts
     .filter((row) => matchesCompanyFilter(row.company_key || row.source_company || row.company, activeCompany))
     .filter((row) => row.status === "edited" || (row.submitted_for_review === false && row.planned_start && row.planned_end))
     .map((row) => vacationKey(row));
-  keys.forEach((key) => {
+  let savedCount = 0;
+  let failedMessage = "";
+  for (const key of keys) {
     const row = vacationForecasts.find((item) => vacationKey(item) === key);
-    if (!row || !row.planned_start || !row.planned_end) return;
+    if (!row || !row.planned_start || !row.planned_end) continue;
+    const submittedAt = new Date().toISOString();
+    if (supabaseClient && row.id) {
+      const { error } = await supabaseClient
+        .from("hr_vacation_periods")
+        .update({
+          planned_start: row.planned_start,
+          planned_end: row.planned_end,
+          status: "waiting_review",
+          raw_import: {
+            ...(row.raw_import || {}),
+            submitted_for_review: true,
+            submitted_by: currentUser.name,
+            submitted_at: submittedAt,
+          },
+        })
+        .eq("id", row.id);
+      if (error) {
+        failedMessage = `${row.employee_name}: ${error.message}`;
+        break;
+      }
+    }
     const saved = JSON.parse(localStorage.getItem("rhVacationEdits") || "{}");
     saved[key] = {
       ...(saved[key] || {}),
@@ -6924,7 +9485,7 @@ function submitAllVacationChanges() {
       status: "waiting_review",
       submitted_for_review: true,
       submitted_by: currentUser.name,
-      submitted_at: new Date().toISOString(),
+      submitted_at: submittedAt,
     };
     localStorage.setItem("rhVacationEdits", JSON.stringify(saved));
     vacationForecasts = vacationForecasts.map((item) => (vacationKey(item) === key ? { ...item, ...saved[key] } : item));
@@ -6939,9 +9500,17 @@ function submitAllVacationChanges() {
       status: vacationChanged ? "alterado" : "aprovado",
       metadata: { vacation_key: key, company: row.company_key || row.source_company || row.company || "" },
     });
-  });
+    savedCount += 1;
+  }
   markRuntimeIndexesDirty();
-  state.vacationMessage = keys.length ? `${keys.length} alteração(ões) de férias enviadas para aprovação.` : "Nenhuma alteração pendente para enviar.";
+  if (failedMessage) {
+    state.vacationMessage = `Algumas férias não foram gravadas no Supabase: ${failedMessage}`;
+  } else if (savedCount && supabaseClient) {
+    await loadSupabaseData();
+    state.vacationMessage = `${savedCount} alteração(ões) de férias gravadas no Supabase e enviadas para aprovação.`;
+  } else {
+    state.vacationMessage = savedCount ? `${savedCount} alteração(ões) de férias enviadas para aprovação.` : "Nenhuma alteração pendente para enviar.";
+  }
   renderPage();
 }
 
@@ -7000,12 +9569,26 @@ function handleDelegatedAppClick(event, appRoot) {
       "[data-people-control-save]",
       "[data-people-control-view]",
       "[data-people-control-inactivate]",
+      "[data-admission-candidate-copy]",
+      "[data-admission-candidate-convert]",
       "[data-announcement-employee]",
       "[data-email-review-approve]",
       "[data-email-review-discard]",
       "[data-communication-new]",
+      "[data-communication-start-channel]",
       "[data-communication-refresh]",
       "[data-communication-modal-close]",
+      "[data-communication-use-template]",
+      "[data-communication-company]",
+      "[data-communication-pick-template]",
+      "[data-communication-pick-employee]",
+      "[data-communication-pick-audience]",
+      "[data-communication-channel]",
+      "[data-communication-audience]",
+      "[data-communication-change-template]",
+      "[data-communication-change-audience]",
+      "[data-communication-confirm-cancel]",
+      "[data-communication-confirm-send]",
       "[data-communication-release]",
       "[data-communication-cancel]",
       "[data-communication-error]",
@@ -7023,6 +9606,7 @@ function handleDelegatedAppClick(event, appRoot) {
       "[data-employee-status-save]",
       "[data-employee-save]",
       "[data-detail-tab]",
+      "[data-detail-control-module]",
       "[data-timeline-filter]",
       "[data-operational-scope]",
       "[data-action]",
@@ -7030,6 +9614,7 @@ function handleDelegatedAppClick(event, appRoot) {
       "[data-vacation-submit]",
       "[data-vacation-send-all]",
       "[data-point-submit]",
+      "[data-point-adjustment-toggle]",
       "[data-point-adjustment-approve]",
       "[data-point-adjustment-reject]",
       "[data-point-adjustment-info]",
@@ -7050,12 +9635,15 @@ function handleDelegatedAppClick(event, appRoot) {
     state.company = dataset.requestsCompany || "Todas";
     renderPage();
   } else if (dataset.routineMark !== undefined) {
+    const companyKey = dataset.routineCompany || state.company || "Todas";
+    const targets = routineCompanyKeys(companyKey);
+    const currentlyDone = targets.every((targetCompany) => routineDoneForCompany(targetCompany, dataset.routineMark, routineCompetence()));
     setRoutineStatus(dataset.routineCompany || state.company || "Todas", dataset.routineMark, {
-      done: true,
-      fileName: "Concluído manualmente",
+      done: !currentlyDone,
+      fileName: currentlyDone ? "Desmarcado manualmente" : "Concluído manualmente",
       category: "monthly",
     });
-    state.rhRoutineMessage = "Rotina marcada como concluída.";
+    state.rhRoutineMessage = currentlyDone ? "Rotina desmarcada para revisão." : "Rotina marcada como concluída.";
     renderPage();
   } else if (dataset.routineExecute !== undefined) {
     target.disabled = true;
@@ -7172,11 +9760,23 @@ function handleDelegatedAppClick(event, appRoot) {
       document.getElementById("people-control-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
     });
   } else if (dataset.peopleControlSave !== undefined) {
-    savePeopleControlEvent(dataset.peopleControlSave);
+    void savePeopleControlEvent(dataset.peopleControlSave);
   } else if (dataset.peopleControlView !== undefined) {
     viewPeopleControlEvent(dataset.peopleControlView);
   } else if (dataset.peopleControlInactivate !== undefined) {
     inactivatePeopleControlEvent(dataset.peopleControlInactivate);
+  } else if (dataset.admissionCandidateCopyPublic !== undefined) {
+    const link = admissionCandidatePublicLink(dataset.admissionCandidateCopyPublic);
+    navigator.clipboard?.writeText(link);
+    state.peopleControlMessage = `Link público do candidato copiado: ${link}`;
+    renderPage();
+  } else if (dataset.admissionCandidateCopy !== undefined) {
+    const link = admissionCandidateShareLink(dataset.admissionCandidateCopy);
+    navigator.clipboard?.writeText(link);
+    state.peopleControlMessage = `Link do candidato copiado: ${link}`;
+    renderPage();
+  } else if (dataset.admissionCandidateConvert !== undefined) {
+    void convertAdmissionCandidate(dataset.admissionCandidateConvert);
   } else if (dataset.announcementEmployee !== undefined) {
     state.announcementEmployeeId = dataset.announcementEmployee || "";
     state.announcementResult = "";
@@ -7187,16 +9787,112 @@ function handleDelegatedAppClick(event, appRoot) {
     updateEmailReviewStatus(dataset.emailReviewDiscard, "cancelled");
   } else if (dataset.communicationNew !== undefined) {
     state.communicationModalOpen = true;
+    state.communicationConfirmOpen = false;
     state.communicationMessage = "";
-    if (!state.communicationTemplateKey) state.communicationTemplateKey = emailTemplateRows[0]?.template_key || "";
+    state.communicationTemplateKey = "";
+    state.communicationTemplateQuery = "";
+    state.communicationRecipientQuery = "";
+    state.communicationEmployeeId = "";
+    state.communicationAudience = "employee";
+    state.communicationAudienceValue = "";
+    state.communicationSubject = "";
     renderPage();
+    void refreshCommunicationTemplatesIfMissing();
+    requestAnimationFrame(() => document.querySelector("#communication-form")?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  } else if (dataset.communicationStartChannel !== undefined) {
+    state.communicationChannel = dataset.communicationStartChannel || "both";
+    state.communicationModalOpen = true;
+    state.communicationConfirmOpen = false;
+    state.communicationMessage = "";
+    state.communicationTemplateKey = "";
+    state.communicationTemplateQuery = "";
+    state.communicationRecipientQuery = "";
+    state.communicationEmployeeId = "";
+    state.communicationAudience = "employee";
+    state.communicationAudienceValue = "";
+    state.communicationSubject = "";
+    renderPage();
+    void refreshCommunicationTemplatesIfMissing();
+  } else if (dataset.communicationUseTemplate !== undefined) {
+    state.communicationTemplateKey = dataset.communicationUseTemplate;
+    state.communicationTemplateQuery = "";
+    state.communicationRecipientQuery = "";
+    state.communicationEmployeeId = "";
+    state.communicationAudience = "employee";
+    state.communicationAudienceValue = "";
+    state.communicationSubject = "";
+    state.communicationModalOpen = true;
+    state.communicationConfirmOpen = false;
+    state.communicationMessage = "";
+    renderPage();
+    void refreshCommunicationTemplatesIfMissing();
   } else if (dataset.communicationRefresh !== undefined) {
+    clearRuntimeDataCache();
     state.communicationMessage = "Atualizando fila de comunicação...";
     renderPage();
-    loadSupabaseData();
+    void loadSupabaseData()
+      .then(() => {
+        state.communicationMessage = "";
+        renderPage();
+      })
+      .catch((error) => {
+        state.communicationMessage = `Não foi possível atualizar a fila: ${error.message}`;
+        renderPage();
+      });
   } else if (dataset.communicationModalClose !== undefined) {
     state.communicationModalOpen = false;
+    state.communicationConfirmOpen = false;
     renderPage();
+  } else if (dataset.communicationPickTemplate !== undefined) {
+    state.communicationTemplateKey = dataset.communicationPickTemplate;
+    state.communicationTemplateQuery = "";
+    renderPage();
+  } else if (dataset.communicationPickEmployee !== undefined) {
+    state.communicationEmployeeId = dataset.communicationPickEmployee;
+    const employee = selectedCommunicationEmployee();
+    state.communicationRecipientQuery = employee?.name || state.communicationRecipientQuery;
+    renderPage();
+  } else if (dataset.communicationPickAudience !== undefined) {
+    if (state.communicationAudience === "employee") {
+      state.communicationEmployeeId = dataset.communicationPickAudience;
+      const employee = selectedCommunicationEmployee();
+      state.communicationRecipientQuery = employee?.name || state.communicationRecipientQuery;
+    } else {
+      state.communicationAudienceValue = dataset.communicationPickAudience;
+      state.communicationRecipientQuery = dataset.communicationPickAudience === "all" ? "" : dataset.communicationPickAudience;
+    }
+    renderPage();
+  } else if (dataset.communicationChannel !== undefined) {
+    state.communicationChannel = dataset.communicationChannel || "both";
+    renderPage();
+  } else if (dataset.communicationCompany !== undefined) {
+    state.communicationCompany = dataset.communicationCompany || "Todas";
+    state.communicationEmployeeId = "";
+    state.communicationAudienceValue = "";
+    state.communicationRecipientQuery = "";
+    renderPage();
+  } else if (dataset.communicationAudience !== undefined) {
+    state.communicationAudience = dataset.communicationAudience || "employee";
+    state.communicationAudienceValue = state.communicationAudience === "all" ? "all" : "";
+    state.communicationEmployeeId = "";
+    state.communicationRecipientQuery = "";
+    renderPage();
+  } else if (dataset.communicationChangeTemplate !== undefined) {
+    state.communicationTemplateKey = "";
+    state.communicationTemplateQuery = "";
+    state.communicationConfirmOpen = false;
+    renderPage();
+  } else if (dataset.communicationChangeAudience !== undefined) {
+    state.communicationEmployeeId = "";
+    state.communicationAudienceValue = state.communicationAudience === "all" ? "all" : "";
+    state.communicationRecipientQuery = "";
+    state.communicationConfirmOpen = false;
+    renderPage();
+  } else if (dataset.communicationConfirmCancel !== undefined) {
+    state.communicationConfirmOpen = false;
+    renderPage();
+  } else if (dataset.communicationConfirmSend !== undefined) {
+    void sendCommunicationDraft();
   } else if (dataset.communicationRelease !== undefined) {
     updateCommunicationEventStatus(dataset.communicationRelease, "pending");
   } else if (dataset.communicationCancel !== undefined) {
@@ -7235,6 +9931,14 @@ function handleDelegatedAppClick(event, appRoot) {
     saveEmployeeDetails(dataset.employeeSave);
   } else if (dataset.detailTab !== undefined) {
     state.detailTab = dataset.detailTab;
+    renderPage();
+  } else if (dataset.detailControlModule !== undefined) {
+    state.peopleControlActiveModule = dataset.detailControlModule || "aso";
+    state.peopleControlEmployeeId = dataset.detailControlEmployee || state.selectedEmployeeId || "";
+    state.peopleControlMessage = "";
+    state.pageHistory = [...(state.pageHistory || []), state.page].slice(-20);
+    state.page = "peopleControls";
+    updatePageUrl(state.page);
     renderPage();
   } else if (dataset.timelineFilter !== undefined) {
     state.timelineFilter = dataset.timelineFilter || "all";
@@ -7284,11 +9988,16 @@ function handleDelegatedAppClick(event, appRoot) {
     state.requestCompany = dataset.requestCompany;
     renderPage();
   } else if (dataset.vacationSubmit !== undefined) {
-    submitVacationForReview(dataset.vacationSubmit);
+    void submitVacationForReview(dataset.vacationSubmit);
+  } else if (dataset.vacationEdit !== undefined) {
+    focusVacationEdit(dataset.vacationEdit);
   } else if (dataset.vacationSendAll !== undefined) {
-    submitAllVacationChanges();
+    void submitAllVacationChanges();
   } else if (dataset.pointSubmit !== undefined) {
     submitMonthlyPoint(dataset.pointSubmit);
+  } else if (dataset.pointAdjustmentToggle !== undefined) {
+    state.pointExpandedAdjustmentId = state.pointExpandedAdjustmentId === dataset.pointAdjustmentToggle ? "" : dataset.pointAdjustmentToggle;
+    renderPage();
   } else if (dataset.pointAdjustmentApprove !== undefined) {
     const nextOwner = pointAdjustmentNextOwner();
     updatePointAdjustment(dataset.pointAdjustmentApprove, {
@@ -7362,6 +10071,22 @@ function bind() {
   if (appRoot && !appRoot.dataset.clickDelegated) {
     appRoot.addEventListener("click", (event) => handleDelegatedAppClick(event, appRoot), true);
     appRoot.dataset.clickDelegated = "true";
+  }
+  bindDateMasks(appRoot || document);
+  bindFileSelectionPreviews(appRoot || document);
+  const employeeDocumentForm = document.querySelector("#employee-document-form");
+  if (employeeDocumentForm) {
+    employeeDocumentForm.addEventListener("submit", (event) => {
+      event.preventDefault();
+      void saveEmployeeDocumentFromForm(employeeDocumentForm);
+    });
+  }
+  const admissionCandidateForm = document.querySelector("#admission-candidate-form");
+  if (admissionCandidateForm) {
+    admissionCandidateForm.addEventListener("submit", (event) => {
+      event.preventDefault();
+      void saveAdmissionCandidateFromForm(admissionCandidateForm);
+    });
   }
   document.querySelectorAll("[data-master-add]").forEach((form) => {
     form.addEventListener("submit", (event) => {
@@ -7592,16 +10317,20 @@ function bind() {
     });
   }
   document.querySelectorAll("[data-vacation-start]").forEach((input) => {
+    input.addEventListener("input", (event) => {
+      handleVacationDateEdit(event, "start");
+    });
     input.addEventListener("change", (event) => {
-      const key = event.target.dataset.vacationStart;
-      saveVacationEdit(key, { planned_start: event.target.value, submitted_for_review: false });
+      handleVacationDateEdit(event, "start");
       renderPage();
     });
   });
   document.querySelectorAll("[data-vacation-end]").forEach((input) => {
+    input.addEventListener("input", (event) => {
+      handleVacationDateEdit(event, "end");
+    });
     input.addEventListener("change", (event) => {
-      const key = event.target.dataset.vacationEnd;
-      saveVacationEdit(key, { planned_end: event.target.value, submitted_for_review: false });
+      handleVacationDateEdit(event, "end");
       renderPage();
     });
   });
@@ -7652,7 +10381,7 @@ function bind() {
   const communicationTemplateSearch = document.querySelector("#communication-template-search");
   if (communicationTemplateSearch) {
     communicationTemplateSearch.addEventListener("input", (event) => {
-      state.communicationTemplateQuery = event.target.value;
+      state.communicationGalleryQuery = event.target.value;
       scheduleRenderWithFocus("#communication-template-search");
     });
   }
@@ -7664,7 +10393,9 @@ function bind() {
   if (communicationTemplateQuery) {
     communicationTemplateQuery.addEventListener("input", (event) => {
       state.communicationTemplateQuery = event.target.value;
-      scheduleRenderWithFocus("#communication-template-query");
+      updateCommunicationTemplateResults();
+      updateCommunicationPreviewOnly();
+      if (!hasCommunicationTemplates()) void refreshCommunicationTemplatesIfMissing();
     });
   }
   const communicationRecipientQuery = document.querySelector("#communication-recipient-query");
@@ -7672,7 +10403,9 @@ function bind() {
     communicationRecipientQuery.addEventListener("input", (event) => {
       state.communicationRecipientQuery = event.target.value;
       state.communicationEmployeeId = "";
-      scheduleRenderWithFocus("#communication-recipient-query");
+      state.communicationAudienceValue = state.communicationAudience === "all" ? "all" : "";
+      updateCommunicationRecipientResults();
+      updateCommunicationPreviewOnly();
     });
   }
   const communicationTemplateSelect = document.querySelector("#communication-template-select");
@@ -7709,16 +10442,25 @@ function bind() {
       state.communicationScheduledAt = event.target.value;
     });
   }
+  const communicationSubject = document.querySelector("#communication-subject");
+  if (communicationSubject) {
+    communicationSubject.addEventListener("input", (event) => {
+      state.communicationSubject = event.target.value;
+      updateCommunicationPreviewOnly();
+    });
+  }
   const communicationDeadline = document.querySelector("#communication-deadline");
   if (communicationDeadline) {
     communicationDeadline.addEventListener("input", (event) => {
       state.communicationDeadline = event.target.value;
+      updateCommunicationPreviewOnly();
     });
   }
   const communicationNote = document.querySelector("#communication-note");
   if (communicationNote) {
     communicationNote.addEventListener("input", (event) => {
       state.communicationNote = event.target.value;
+      updateCommunicationPreviewOnly();
     });
   }
   const pointAdjustment = document.querySelector("#point-adjustment-form");
@@ -7736,15 +10478,8 @@ function bind() {
       }
     });
   });
-  document.querySelectorAll(".date-mask").forEach((input) => {
-    input.addEventListener("input", (event) => {
-      const formatted = formatDateInputValue(event.target.value);
-      event.target.value = formatted;
-      if (formatted.length === 10) {
-        document.querySelector("#point-adjustment-form select")?.focus?.();
-      }
-    });
-  });
+  bindDateMasks(document);
+  bindFileSelectionPreviews(document);
 }
 
 async function handleEmployeeSubmit(event) {
@@ -7758,9 +10493,10 @@ async function handleEmployeeSubmit(event) {
     company: form.get("company"),
     department: form.get("department"),
     role: form.get("role"),
+    email: cleanEmail(form.get("email")),
     manager: form.get("manager") || "Sem líder",
     status: "Ativo",
-    admission: formatDate(form.get("admission")),
+    admission: formatDate(normalizeDateInputValue(form.get("admission"))),
     vacation: "Sem programação",
     timeBank: "Sem fechamento",
   };
@@ -7868,103 +10604,151 @@ async function handleAnnouncementSubmit(event) {
 
 async function handleCommunicationSubmit(event) {
   event.preventDefault();
-  if (!canSendAnnouncements()) {
-    state.communicationMessage = "Seu perfil não tem permissão para enviar comunicados.";
+  const validation = communicationDraftValidation();
+  if (!validation.ok) {
+    state.communicationConfirmOpen = false;
+    state.communicationMessage = validation.message;
     renderPage();
     return;
   }
-  if (!supabaseClient) {
-    state.communicationMessage = "Supabase indisponível para criar comunicado.";
-    renderPage();
-    return;
-  }
-  const employee = selectedCommunicationEmployee();
-  const template = selectedCommunicationTemplate();
-  if (!template) {
-    state.communicationMessage = "Selecione um template antes de enviar.";
-    renderPage();
-    return;
-  }
-  if (!employee) {
-    state.communicationMessage = "Selecione um colaborador antes de enviar.";
-    renderPage();
-    return;
-  }
-  if (!employee.email) {
-    state.communicationMessage = `${employee.name} não tem e-mail cadastrado.`;
-    renderPage();
-    return;
-  }
+  state.communicationMessage = "";
+  state.communicationConfirmOpen = true;
+  renderPage();
+}
 
-  const scheduledFor = state.communicationScheduleEnabled && state.communicationScheduledAt
-    ? new Date(state.communicationScheduledAt).toISOString()
-    : new Date().toISOString();
-  const payload = {
-    colaborador_nome: employee.name,
-    employee_name: employee.name,
-    empresa: employee.company || "",
-    departamento: employee.department || "",
-    cargo: employee.role || "",
-    prazo: state.communicationDeadline.trim(),
-    observacao: state.communicationNote.trim(),
-    complemento: state.communicationNote.trim(),
-    recorrencia: state.communicationRecurrence,
-    link: window.location.origin,
-    remetente_nome: currentUser.name,
-  };
-  const eventRow = {
-    app_name: "recursos_humanos",
-    module_name: template.module_name || "comunicacao",
-    event_type: "comunicado_avulso",
-    employee_id: employee.dbId || employee.id,
-    employee_name: employee.name,
-    recipient_email: employee.email,
-    recipient_name: employee.name,
-    recipient_type: template.recipient_type || "colaborador",
-    subject: renderEmailTemplateValue(template.subject_template || template.template_key, payload),
-    template_key: template.template_key,
-    payload,
-    status: "pending",
-    scheduled_for: scheduledFor,
-    created_by: state.authProfile?.id || currentUser.authUserId || currentUser.name,
-  };
-  const { data, error } = await supabaseClient.from("email_events").insert(eventRow).select("id,status").single();
-  if (error) {
-    state.communicationMessage = `Não foi possível enfileirar o comunicado: ${error.message}`;
+async function sendCommunicationDraft() {
+  const validation = communicationDraftValidation();
+  if (!validation.ok) {
+    state.communicationConfirmOpen = false;
+    state.communicationMessage = validation.message;
     renderPage();
     return;
   }
-
-  if (state.communicationRecurrence !== "unico" || state.communicationScheduleEnabled) {
-    const nextDate = scheduledFor.slice(0, 10);
-    const { error: scheduleError } = await supabaseClient.from("hr_scheduled_communications").insert({
-      template_key: template.template_key,
-      employee_id: employee.dbId || null,
-      recorrencia: state.communicationRecurrence,
-      proximo_envio: nextDate,
-      payload,
-      ativo: true,
-      created_by: state.authProfile?.id || null,
+  state.communicationConfirmOpen = false;
+  try {
+    const { targets, template } = validation;
+    const scheduledFor = communicationScheduledForIso();
+    const prepared = targets.map((employee) => {
+      const finalPreview = communicationFinalPreview(template, employee);
+      const delivery = communicationDeliveryChannel(template, employee);
+      const recipientEmail = employeeEmailForDelivery(employee);
+      return { employee, finalPreview, delivery, recipientEmail };
     });
-    if (scheduleError) {
-      state.communicationMessage = `Evento criado (${data.id}), mas o agendamento não foi salvo: ${scheduleError.message}`;
-      renderPage();
-      return;
-    }
-  }
+    const emailRows = prepared
+      .filter(({ delivery, recipientEmail }) => delivery.email && recipientEmail)
+      .map(({ employee, finalPreview, recipientEmail }) => ({
+        app_name: "recursos_humanos",
+        module_name: template.module_name || "comunicacao",
+        event_type: "comunicado_avulso",
+        employee_id: employee.dbId || employee.id || null,
+        employee_name: employee.name,
+        recipient_email: recipientEmail,
+        recipient_name: employee.name,
+        recipient_type: template.recipient_type || "colaborador",
+        subject: finalPreview.subject,
+        template_key: template.template_key,
+        payload: finalPreview.payload,
+        status: "pending",
+        scheduled_for: scheduledFor,
+        created_by: state.authProfile?.id || currentUser.authUserId || null,
+      }));
+    const appRows = prepared
+      .filter(({ delivery }) => delivery.app)
+      .map(({ employee, finalPreview, delivery }) => {
+        const appCard = communicationAppCardContent(template, finalPreview.payload, finalPreview.subject);
+        return {
+          company_id: routineCompanyId(employee.company) || null,
+          target_employee_id: employee.dbId || null,
+          template_key: template.template_key,
+          delivery_channel: delivery.email ? "email_app" : "app",
+          title: appCard.title,
+          body: appCard.body,
+          payload: {
+            ...finalPreview.payload,
+            card_title: appCard.title,
+            card_body: appCard.body,
+            email_subject: finalPreview.subject,
+            missing_email: delivery.missingEmail,
+            scheduled_for: scheduledFor,
+          },
+          status: state.communicationScheduleEnabled ? "scheduled" : "published",
+          published_at: scheduledFor,
+          created_by: state.authProfile?.id || null,
+        };
+      });
 
-  state.communicationMessage = `Comunicado enfileirado para ${employee.name}. Evento ${data.id} com status ${data.status}.`;
-  void recordTimeline(employee.dbId || employee.id, "comunicado", `E-mail enviado: ${eventRow.subject}`, template.template_key, "enviado", {
-    email_event_id: data.id,
-    template_key: template.template_key,
-    scheduled_for: scheduledFor,
-  });
-  state.communicationModalOpen = false;
-  state.communicationRecipientQuery = "";
-  state.communicationEmployeeId = "";
-  state.communicationDeadline = "";
-  state.communicationNote = "";
-  await loadSupabaseData();
+    let emailData = [];
+    if (emailRows.length) {
+      const { data, error } = await supabaseClient.from("email_events").insert(emailRows).select("id,status,employee_id,recipient_name");
+      if (error) {
+        state.communicationMessage = `Não foi possível enfileirar o comunicado: ${error.message}`;
+        renderPage();
+        return;
+      }
+      emailData = data || [];
+    }
+
+    let appData = [];
+    if (appRows.length) {
+      const { data, error: appError } = await supabaseClient.from("hr_announcements").insert(appRows).select("id,target_employee_id");
+      if (appError) {
+        state.communicationMessage = `E-mails ${emailRows.length ? "criados" : "não usados"}, mas o card no app falhou: ${appError.message}`;
+        renderPage();
+        return;
+      }
+      appData = data || [];
+    }
+
+    if (state.communicationRecurrence !== "unico" || state.communicationScheduleEnabled) {
+      const nextDate = scheduledFor.slice(0, 10);
+      const scheduleRows = prepared.map(({ employee, finalPreview }) => ({
+        template_key: template.template_key,
+        employee_id: employee.dbId || null,
+        recorrencia: state.communicationRecurrence,
+        proximo_envio: nextDate,
+        payload: finalPreview.payload,
+        ativo: true,
+        created_by: state.authProfile?.id || null,
+      }));
+      const { error: scheduleError } = await supabaseClient.from("hr_scheduled_communications").insert(scheduleRows);
+      if (scheduleError) {
+        state.communicationMessage = `Comunicado criado, mas o agendamento não foi salvo: ${scheduleError.message}`;
+        renderPage();
+        return;
+      }
+    }
+
+    prepared.forEach(({ employee, finalPreview }) => {
+      void recordTimeline(employee.dbId || employee.id, "comunicado", `Comunicado enviado: ${finalPreview.subject}`, template.template_key, "enviado", {
+        template_key: template.template_key,
+        scheduled_for: scheduledFor,
+      });
+    });
+    const missingEmailCount = prepared.filter(({ delivery }) => delivery.missingEmail).length;
+    state.communicationMessage = `Comunicação ${state.communicationScheduleEnabled ? "agendada" : "enviada para processamento"} para ${targets.length} destinatário${targets.length === 1 ? "" : "s"}. E-mails: ${emailData.length}. App: ${appData.length}.${missingEmailCount ? ` ${missingEmailCount} sem e-mail válido seguiram pelo app.` : ""}`;
+    state.communicationModalOpen = false;
+    state.communicationConfirmOpen = false;
+    state.communicationRecipientQuery = "";
+    state.communicationEmployeeId = "";
+    state.communicationTemplateKey = "";
+    state.communicationTemplateQuery = "";
+    state.communicationAudience = "employee";
+    state.communicationAudienceValue = "";
+    state.communicationSubject = "";
+    state.communicationDeadline = "";
+    state.communicationNote = "";
+    try {
+      await loadSupabaseData();
+    } catch (refreshError) {
+      console.warn("Comunicação criada, mas a atualização da tela falhou:", refreshError);
+      renderPage();
+    }
+  } catch (error) {
+    console.error("Erro ao enviar comunicação:", error);
+    state.communicationConfirmOpen = false;
+    state.communicationMessage = `Erro ao enviar comunicação: ${error?.message || String(error)}`;
+    renderPage();
+  }
 }
 
 async function updateCommunicationEventStatus(eventId, status) {
@@ -8106,7 +10890,8 @@ async function tryPersistEmployee(form, employeeCode) {
         position_id: position.id,
         employee_code: employeeCode,
         full_name: String(form.get("name")),
-        admission_date: form.get("admission") || null,
+        email: cleanEmail(form.get("email")) || null,
+        admission_date: normalizeDateInputValue(form.get("admission")) || null,
         status: "active",
         notes: String(form.get("notes") || ""),
         raw_import: { source: "app_form", temporary_code: employeeCode },
@@ -8169,6 +10954,7 @@ async function saveEmployeeDetails(employeeId) {
     company: readField("company") || employee.company,
     department: readField("department") || employee.department,
     role: readField("role") || employee.role,
+    email: cleanEmail(readField("email")) || "",
     manager: leader?.name || "Sem líder",
     status: document.querySelector(`[data-employee-status-select="${employeeId}"]`)?.value || employee.status,
   };
@@ -8188,6 +10974,7 @@ async function saveEmployeeDetails(employeeId) {
       .from("hr_employees")
       .update({
         full_name: nextEmployee.name,
+        email: nextEmployee.email || null,
         company_id: company.id,
         department_id: department.id,
         position_id: position.id,

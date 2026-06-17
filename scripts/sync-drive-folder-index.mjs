@@ -34,16 +34,16 @@ function folderUrl(id) {
 }
 
 async function upsertFolder(supabase, folder) {
-  const query = supabase
+  let query = supabase
     .from("hr_drive_folders")
     .select("id")
     .eq("folder_type", folder.folder_type)
-    .is("employee_id", null)
-    .maybeSingle();
+    .is("employee_id", null);
 
-  const { data: existing, error: selectError } = folder.company_id
-    ? await query.eq("company_id", folder.company_id)
-    : await query.is("company_id", null);
+  query = folder.company_id ? query.eq("company_id", folder.company_id) : query.is("company_id", null);
+  query = folder.competence_month ? query.eq("competence_month", folder.competence_month) : query.is("competence_month", null);
+
+  const { data: existing, error: selectError } = await query.maybeSingle();
 
   if (selectError) throw selectError;
 
@@ -90,6 +90,56 @@ folders.push({
   drive_folder_url: folderUrl(index.root),
   company_id: null,
 });
+
+const generalFolderTypes = {
+  colaboradores: ["colaboradores", "Colaboradores"],
+  importacoes: ["importacoes", "Importações"],
+  pacote_mensal: ["pacote_mensal", "Pacote mensal contabilidade"],
+  rotinas: ["rotinas", "Rotinas"],
+  comunicados: ["comunicados", "Comunicados"],
+  logos: ["logos", "Logos"],
+  inbox: ["inbox", "Inbox"],
+};
+
+for (const [key, folderId] of Object.entries(index.general ?? {})) {
+  const [folderType, fallbackName] = generalFolderTypes[key] ?? [`general_${key}`, key];
+  folders.push({
+    folder_type: folderType,
+    folder_name: fallbackName,
+    drive_folder_id: folderId,
+    drive_folder_url: folderUrl(folderId),
+    company_id: null,
+  });
+}
+
+const importFolderTypes = {
+  fichas_funcionais: ["importacao_fichas", "Importações/Fichas funcionais"],
+  previsao_ferias: ["importacao_ferias", "Importações/Previsão de férias"],
+  contracheques: ["importacao_contracheques", "Importações/Contracheques"],
+  folha_bruta: ["importacao_folha", "Importações/Folha bruta"],
+};
+
+for (const [key, folderId] of Object.entries(index.imports ?? {})) {
+  const [folderType, fallbackName] = importFolderTypes[key] ?? [`importacao_${key}`, `Importações/${key}`];
+  folders.push({
+    folder_type: folderType,
+    folder_name: fallbackName,
+    drive_folder_id: folderId,
+    drive_folder_url: folderUrl(folderId),
+    company_id: null,
+  });
+}
+
+for (const [competence, folderId] of Object.entries(index.monthly_packages ?? {})) {
+  folders.push({
+    folder_type: "pacote_mensal_competencia",
+    folder_name: `Pacote mensal contabilidade/${competence}`,
+    drive_folder_id: folderId,
+    drive_folder_url: folderUrl(folderId),
+    company_id: null,
+    competence_month: competence,
+  });
+}
 
 for (const [companyKey, folderId] of Object.entries(index.companies ?? {})) {
   const company = companyByKey.get(companyKey);
