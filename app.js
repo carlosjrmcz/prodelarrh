@@ -16,7 +16,7 @@ const SUPABASE_ANON_KEY = runtimeEnv.VITE_SUPABASE_ANON_KEY || runtimeEnv.VITE_S
 const supabaseUrl = SUPABASE_URL;
 const supabaseKey = SUPABASE_ANON_KEY;
 const SECURE_DRIVE_FILE_FUNCTION_URL = supabaseUrl ? `${supabaseUrl}/functions/v1/download-drive-file` : "";
-const APP_VERSION = "20260617-prod-build-opt-1";
+const APP_VERSION = "20260617-mobile-pwa-1";
 const PUBLIC_APP_URL = "https://rhprodelar.netlify.app/";
 
 if (window.location.protocol === "file:") {
@@ -2504,7 +2504,8 @@ function shell(content) {
       : `<img class="topbar-logos" src="./assets/grupo-prodelar-logos.png" alt="Prodelar, Colmob e Servimec" loading="lazy" decoding="async" />`;
   return `
     <div class="shell">
-      <aside class="sidebar">
+      <div class="sidebar-overlay" id="sidebar-overlay"></div>
+      <aside class="sidebar" id="app-sidebar">
         <div class="brand">
           <img class="brand-logos" src="./assets/grupo-prodelar-logos.png" alt="Prodelar, Colmob e Servimec" loading="eager" decoding="async" />
           <div class="brand-copy"><strong>Recursos Humanos</strong><span>Prodelar · Colmob · Servimec</span></div>
@@ -2527,8 +2528,13 @@ function shell(content) {
           .join("")}
       </aside>
       <main class="main">
-        <header class="topbar">
-          <div><h1>${title}</h1><p>${subtitle} · ${state.dataStatus}</p></div>
+        <header class="topbar main-header">
+          <div class="topbar-title-row">
+            <button class="hamburger-btn mobile-only" id="hamburger-btn" type="button" aria-controls="app-sidebar" aria-expanded="false" aria-label="Abrir menu">
+              <span></span><span></span><span></span>
+            </button>
+            <div><h1 class="page-title">${title}</h1><p>${subtitle} · ${state.dataStatus}</p></div>
+          </div>
           <div class="actions">
             <div class="identity-lock"><span>Usuário</span><strong>${escapeHtml(currentUser.name)}</strong><small>${escapeHtml(currentUser.profile)}</small></div>
             <div class="topbar-brand">${topbarBrand}</div>
@@ -9863,6 +9869,54 @@ function commitAppHtml(html, binder) {
   app.innerHTML = html;
   lastRenderedHtml = html;
   binder?.();
+  enhanceMobileLayout(app);
+}
+
+function initMobileMenu() {
+  const btn = document.getElementById("hamburger-btn");
+  const sidebar = document.querySelector(".sidebar");
+  const overlay = document.getElementById("sidebar-overlay");
+  if (!btn || !sidebar || btn.dataset.mobileMenuBound) return;
+
+  const closeMenu = () => {
+    sidebar.classList.remove("open");
+    overlay?.classList.remove("active");
+    document.body.classList.remove("sidebar-lock");
+    btn.setAttribute("aria-expanded", "false");
+  };
+
+  const toggleMenu = () => {
+    const isOpen = sidebar.classList.toggle("open");
+    overlay?.classList.toggle("active", isOpen);
+    document.body.classList.toggle("sidebar-lock", isOpen);
+    btn.setAttribute("aria-expanded", String(isOpen));
+  };
+
+  btn.addEventListener("click", toggleMenu);
+  overlay?.addEventListener("click", closeMenu);
+  document.querySelectorAll(".nav-button, .nav-item").forEach((item) => {
+    item.addEventListener("click", closeMenu);
+  });
+  btn.dataset.mobileMenuBound = "true";
+}
+
+function enhanceMobileTables(root = document) {
+  root.querySelectorAll(".table-wrap table").forEach((table) => {
+    table.classList.add("mobile-cards");
+    const headers = Array.from(table.querySelectorAll("thead th")).map((th) => th.textContent.trim()).filter(Boolean);
+    if (!headers.length) return;
+    table.querySelectorAll("tbody tr").forEach((row) => {
+      Array.from(row.children).forEach((cell, index) => {
+        if (cell.tagName !== "TD" || cell.hasAttribute("colspan") || cell.dataset.label) return;
+        cell.dataset.label = headers[index] || "";
+      });
+    });
+  });
+}
+
+function enhanceMobileLayout(root = document) {
+  initMobileMenu();
+  enhanceMobileTables(root);
 }
 
 const pageRenderers = {
