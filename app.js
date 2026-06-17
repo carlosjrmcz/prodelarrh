@@ -16,8 +16,9 @@ const SUPABASE_ANON_KEY = runtimeEnv.VITE_SUPABASE_ANON_KEY || runtimeEnv.VITE_S
 const supabaseUrl = SUPABASE_URL;
 const supabaseKey = SUPABASE_ANON_KEY;
 const SECURE_DRIVE_FILE_FUNCTION_URL = supabaseUrl ? `${supabaseUrl}/functions/v1/download-drive-file` : "";
-const APP_VERSION = "20260617-usability-p3-1";
+const APP_VERSION = "20260618-pwa-installable-1";
 const PUBLIC_APP_URL = "https://rhprodelar.netlify.app/";
+let deferredInstallPrompt = null;
 
 if (window.location.protocol === "file:") {
   window.location.replace(`http://127.0.0.1:5174/?r=${APP_VERSION}`);
@@ -32,6 +33,53 @@ function syncAppVersionUrl() {
 }
 
 syncAppVersionUrl();
+
+function isStandaloneApp() {
+  return window.matchMedia?.("(display-mode: standalone)")?.matches || window.navigator.standalone === true;
+}
+
+function dismissInstallBanner() {
+  document.getElementById("install-banner")?.remove();
+}
+
+function showInstallBanner() {
+  if (!deferredInstallPrompt || document.getElementById("install-banner") || isStandaloneApp()) return;
+  const banner = document.createElement("div");
+  banner.id = "install-banner";
+  banner.className = "install-banner";
+  banner.innerHTML = `
+    <span>Instale o Prodelar RH no seu celular</span>
+    <div class="install-banner-actions">
+      <button class="install-banner-primary" type="button" onclick="installApp()">Instalar</button>
+      <button class="install-banner-secondary" type="button" onclick="dismissInstallBanner()">Agora não</button>
+    </div>`;
+  document.body.appendChild(banner);
+}
+
+async function installApp() {
+  if (!deferredInstallPrompt) return;
+  deferredInstallPrompt.prompt();
+  await deferredInstallPrompt.userChoice;
+  deferredInstallPrompt = null;
+  dismissInstallBanner();
+}
+
+window.installApp = installApp;
+window.dismissInstallBanner = dismissInstallBanner;
+
+window.addEventListener("beforeinstallprompt", (event) => {
+  event.preventDefault();
+  deferredInstallPrompt = event;
+  showInstallBanner();
+});
+
+if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").catch((error) => {
+      console.warn("Service worker falhou:", error);
+    });
+  });
+}
 
 function getUrlPage() {
   if (window.location.protocol === "file:") return "";
