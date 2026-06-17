@@ -15,7 +15,7 @@ const SUPABASE_URL = runtimeEnv.VITE_SUPABASE_URL || "";
 const SUPABASE_ANON_KEY = runtimeEnv.VITE_SUPABASE_ANON_KEY || runtimeEnv.VITE_SUPABASE_PUBLISHABLE_KEY || "";
 const supabaseUrl = SUPABASE_URL;
 const supabaseKey = SUPABASE_ANON_KEY;
-const APP_VERSION = "20260617-no-email-approval";
+const APP_VERSION = "20260617-effective-templates-fix";
 const PUBLIC_APP_URL = "https://rhprodelar.netlify.app/";
 
 if (window.location.protocol === "file:") {
@@ -1812,7 +1812,7 @@ function visibleEmployeesForRequest() {
       const scoped = employeesManagedBy(currentUser.name).filter((employee) => normalizeText(employee.company) === normalizeText(state.requestCompany));
       return scoped.length ? scoped : employees.filter((employee) => normalizeText(employee.company) === normalizeText(state.requestCompany)).slice(0, 20);
     }
-    const own = currentEmployeeRecord();
+    const own = effectiveEmployeeRecord();
     return own ? [own] : employees.slice(0, 1);
   });
 }
@@ -1832,7 +1832,7 @@ function teamEmployeesForCurrentUser() {
     }
     if (currentUser.profile === "RH") return employees;
     if (currentUser.profile === "Diretoria") return employeesInLeadershipTree(currentUser.name);
-    const own = currentEmployeeRecord();
+    const own = effectiveEmployeeRecord();
     return own ? [own] : [];
   });
 }
@@ -1914,6 +1914,19 @@ function currentEmployeeRecord() {
     }) ||
     null
   ));
+}
+
+function effectiveEmployeeRecord(fallback = null) {
+  const effectiveId = getEffectiveEmployeeId();
+  if (effectiveId) {
+    const byId = employees.find((employee) => employee.dbId === effectiveId || employee.id === effectiveId);
+    if (byId) return byId;
+  }
+  return fallback || currentEmployeeRecord();
+}
+
+function getEffectiveProfileLabel() {
+  return appProfileFromRoleCode(getEffectiveRoleCode()) || currentUser.profile;
 }
 
 function directManagerForLeader(leaderName = currentUser.name) {
@@ -2006,7 +2019,7 @@ function inferredRequestStartForEmployee(employeeName) {
 }
 
 function immediateLeaderName() {
-  const employee = currentEmployeeRecord();
+  const employee = effectiveEmployeeRecord();
   if (currentUser.profile === "Colaborador") return employee?.manager && employee.manager !== "Sem líder" ? employee.manager : "Supervisor direto";
   if (currentUser.profile === "Supervisor") return directManagerForLeader(currentUser.name) || "Diretoria";
   if (currentUser.profile === "Gerente") return directManagerForLeader(currentUser.name) || "Diretoria";
@@ -3435,7 +3448,7 @@ function employeeFormPage() {
 }
 
 function requestFormPage() {
-  const employee = currentEmployeeRecord();
+  const employee = effectiveEmployeeRecord();
   const isPortalSelfRequest = state.requestReturnPage === "portal";
   const isEmployee = currentUser.profile === "Colaborador" || isPortalSelfRequest;
   const canChooseCompany = ["RH", "Diretoria"].includes(currentUser.profile) && !isEmployee;
@@ -3728,8 +3741,9 @@ function documentsPage() {
 }
 
 function vacationsPage() {
-  const employeeView = currentUser.profile === "Colaborador" || (state.vacationScope === "self" && state.vacationScopeSource === "portal");
-  const ownEmployee = currentEmployeeRecord();
+  const effectiveProfile = getEffectiveProfileLabel();
+  const employeeView = effectiveProfile === "Colaborador" || (state.vacationScope === "self" && state.vacationScopeSource === "portal");
+  const ownEmployee = effectiveEmployeeRecord();
   const ownEmployeeName = ownEmployee?.name || currentUser.name;
   const supervisorView = currentUser.profile === "Supervisor";
   const managerView = currentUser.profile === "Gerente";
@@ -4773,8 +4787,8 @@ function portalRoutineCards() {
 }
 
 function currentUserCommunicationRows() {
-  const employee = currentEmployeeRecord() || currentUser;
-  const employeeId = employee?.dbId || employee?.id || state.authProfile?.employee_id || "";
+  const employee = effectiveEmployeeRecord() || currentUser;
+  const employeeId = getEffectiveEmployeeId() || employee?.dbId || employee?.id || state.authProfile?.employee_id || "";
   const email = normalizeText(employee?.email || currentUser.email || state.authProfile?.email || "");
   const employeeName = employee?.name || currentUser.name;
   const employeeCompany = employee?.company || currentUser.company || "";
@@ -7429,7 +7443,7 @@ function peopleControlsPage() {
 }
 
 function employeePaystubRows(employee = currentUser) {
-  const resolvedEmployee = employee === currentUser ? currentEmployeeRecord() || employee : employee;
+  const resolvedEmployee = employee === currentUser ? effectiveEmployeeRecord(employee) || employee : employee;
   const employeeName = resolvedEmployee.name || currentUser.name;
   const employeeId = normalizeText(resolvedEmployee.id || "");
   const rows = indexedByEmployee(dataIndex.paystubsByEmployee, employeeName, paystubRecords, (record) => record.employee_name)
@@ -9091,7 +9105,7 @@ function renderPage() {
 function timelineEmployeeId(employee = null) {
   if (employee?.dbId) return employee.dbId;
   if (employee?.id && /^[0-9a-f-]{36}$/i.test(employee.id)) return employee.id;
-  return currentEmployeeRecord()?.dbId || "";
+  return getEffectiveEmployeeId() || effectiveEmployeeRecord()?.dbId || "";
 }
 
 async function recordEmployeeTimeline({
@@ -11073,7 +11087,7 @@ async function tryPersistRequest(form, fallbackProtocol, requestDraft = null) {
     });
 
     await recordEmployeeTimeline({
-      employee: selectedEmployee || currentEmployeeRecord(),
+      employee: selectedEmployee || effectiveEmployeeRecord(),
       eventType: "solicitacao",
       moduleName: "solicitacoes",
       title: `${data.protocol_number} - Solicitação criada`,
