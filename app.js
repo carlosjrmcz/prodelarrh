@@ -15,7 +15,7 @@ const SUPABASE_URL = runtimeEnv.VITE_SUPABASE_URL || "";
 const SUPABASE_ANON_KEY = runtimeEnv.VITE_SUPABASE_ANON_KEY || runtimeEnv.VITE_SUPABASE_PUBLISHABLE_KEY || "";
 const supabaseUrl = SUPABASE_URL;
 const supabaseKey = SUPABASE_ANON_KEY;
-const APP_VERSION = "20260617-aso-epi-impersonation";
+const APP_VERSION = "20260617-no-email-approval";
 const PUBLIC_APP_URL = "https://rhprodelar.netlify.app/";
 
 if (window.location.protocol === "file:") {
@@ -850,7 +850,6 @@ const pages = [
       ["rhRoutines", "☑", "Rotinas / Importações RH", ["RH", "Diretoria"]],
       ["accounting", "⇪", "Pacote mensal", ["RH", "Diretoria"]],
       ["emails", "✉", "Comunicação RH", ["RH", "Diretoria"]],
-      ["emailReview", "✓", "Aprovar e-mails", ["RH"]],
       ["masterData", "◎", "Empresas e setores", ["RH", "Diretoria"]],
       ["hierarchy", "⇄", "Hierarquia", ["RH", "Diretoria"]],
       ["employees", "☷", "Colaboradores", ["RH", "Diretoria"]],
@@ -882,7 +881,7 @@ const titles = {
   paystubs: ["Contracheques", "Processamento do PDF único em arquivos individuais por colaborador."],
   emails: ["Central de Comunicação RH", "E-mails, comunicados no app, agendamentos e prévia final em uma única tela."],
   announcement: ["Central de Comunicação RH", "E-mails, comunicados no app, agendamentos e prévia final em uma única tela."],
-  emailReview: ["Aprovação de e-mails", "Fila de eventos aguardando revisão antes do envio."],
+  emailReview: ["Fila de e-mails", "Consulta técnica da fila de e-mails."],
 };
 
 function statusPill(value) {
@@ -991,6 +990,10 @@ function safeJsonParse(value, fallback) {
   }
 }
 
+function normalizeEmailQueueStatus(status) {
+  return status === "waiting_review" ? "pending" : (status || "");
+}
+
 const runtimeCacheKey = "rhRuntimeDataCache:v3";
 const runtimeCacheTtlMs = 30 * 60 * 1000;
 let supabaseLoadInFlight = null;
@@ -1022,7 +1025,9 @@ function applyRuntimeDataCache(cache) {
   paystubRecords = Array.isArray(cache.paystubRecords) ? cache.paystubRecords : [];
   employeeDocumentRecords = Array.isArray(cache.employeeDocumentRecords) ? cache.employeeDocumentRecords : [];
   employeeTimelineEvents = Array.isArray(cache.employeeTimelineEvents) ? cache.employeeTimelineEvents : [];
-  emailReviewEvents = Array.isArray(cache.emailReviewEvents) ? cache.emailReviewEvents : [];
+  emailReviewEvents = Array.isArray(cache.emailReviewEvents)
+    ? cache.emailReviewEvents.map((event) => ({ ...event, status: normalizeEmailQueueStatus(event.status) }))
+    : [];
   emailTemplateRows = Array.isArray(cache.emailTemplateRows) ? cache.emailTemplateRows : [];
   applySimulationHierarchy();
   rebuildRuntimeIndexes();
@@ -2516,7 +2521,7 @@ async function loadSupabaseDataFresh() {
       module_name: row.module_name,
       title: row.title,
       description: row.description || "",
-      status: row.status || "",
+      status: normalizeEmailQueueStatus(row.status),
       metadata: row.metadata || {},
       created_at: row.created_at,
       related_table: row.related_table || "",
@@ -7569,8 +7574,9 @@ function paystubsPage() {
 
 function communicationStatusMeta(status) {
   const map = {
-    waiting_review: ["Aguardando revisão", "review"],
-    pending: ["Agendado", "pending"],
+    waiting_review: ["Pendente", "pending"],
+    pending: ["Pendente", "pending"],
+    scheduled: ["Agendado", "pending"],
     processing: ["Processando", "processing"],
     sent: ["Enviado", "sent"],
     failed: ["Falha", "failed"],
@@ -7808,16 +7814,17 @@ function communicationTemplateLabel(template) {
 }
 
 function communicationStatusCards() {
+  const now = Date.now();
   const counts = {
-    waiting_review: emailReviewEvents.filter((event) => event.status === "waiting_review").length,
-    pending: emailReviewEvents.filter((event) => event.status === "pending").length,
+    pending: emailReviewEvents.filter((event) => event.status === "pending" && (!event.scheduled_for || Date.parse(event.scheduled_for) <= now)).length,
+    scheduled: emailReviewEvents.filter((event) => event.status === "pending" && event.scheduled_for && Date.parse(event.scheduled_for) > now).length,
     processing: emailReviewEvents.filter((event) => event.status === "processing").length,
     sent: emailReviewEvents.filter((event) => event.status === "sent").length,
     failed: emailReviewEvents.filter((event) => event.status === "failed").length,
   };
   return [
-    ["waiting_review", "Aguardando revisão", counts.waiting_review],
-    ["pending", "Agendados", counts.pending],
+    ["pending", "Pendentes", counts.pending],
+    ["scheduled", "Agendados", counts.scheduled],
     ["processing", "Processando", counts.processing],
     ["sent", "Enviados", counts.sent],
     ["failed", "Falhas", counts.failed],
@@ -8124,7 +8131,7 @@ function communicationQueueTable() {
   const rows = communicationQueueRows();
   return `<div class="card table-wrap communication-panel">
     <div class="section-title communication-table-title">
-      <div><h2>Fila em andamento</h2><p>Eventos pendentes, em revisão, processando ou com falha.</p></div>
+      <div><h2>Fila em andamento</h2><p>Eventos pendentes, agendados, processando ou com falha.</p></div>
       <label class="compact-search"><span>Busca</span><input id="communication-queue-search" value="${escapeHtml(state.communicationQueueQuery)}" placeholder="Destinatário, template ou evento" /></label>
     </div>
     <table>
@@ -8141,7 +8148,6 @@ function communicationQueueTable() {
                   <td>${event.scheduled_for ? formatDateTime(event.scheduled_for) : "Agora"}</td>
                   <td>${event.attempts || 0}</td>
                   <td class="table-actions">
-                    <button class="btn small" data-communication-release="${event.id}" ${event.status === "waiting_review" && canReviewEmails() ? "" : "disabled"}>Liberar</button>
                     <button class="btn small danger" data-communication-cancel="${event.id}" ${["sent", "cancelled"].includes(event.status) ? "disabled" : ""}>Cancelar</button>
                     <button class="btn small" data-communication-error="${event.id}" ${event.last_error ? "" : "disabled"}>Ver erro</button>
                   </td>
@@ -8889,7 +8895,7 @@ function emailReviewCard(event) {
           <h2>${escapeHtml(preview.subject)}</h2>
           <p>${escapeHtml(event.recipient_name || "Sem nome")} · ${escapeHtml(event.recipient_email || "sem e-mail")}</p>
         </div>
-        ${statusPill("Revisão RH")}
+        ${statusPill(communicationStatusMeta(event.status)[0])}
       </div>
       <div class="email-review-grid">
         <div class="email-review-meta">
@@ -8905,7 +8911,7 @@ function emailReviewCard(event) {
         </div>
       </div>
       <div class="email-review-actions">
-        <button class="btn primary" type="button" data-email-review-approve="${event.id}" ${canAct ? "" : "disabled"}>Aprovar</button>
+        <button class="btn primary" type="button" data-email-review-approve="${event.id}" ${canAct ? "" : "disabled"}>Enviar agora</button>
         <button class="btn danger" type="button" data-email-review-discard="${event.id}" ${canAct ? "" : "disabled"}>Descartar</button>
       </div>
     </article>`;
@@ -8913,18 +8919,19 @@ function emailReviewCard(event) {
 
 function emailReviewPage() {
   const allowed = canReviewEmails();
+  const rows = emailReviewEvents.filter((event) => event.status === "waiting_review");
   return `
     ${state.emailReviewMessage ? `<div class="notice form-notice"><strong>Retorno</strong><p>${escapeHtml(state.emailReviewMessage)}</p></div>` : ""}
     <div class="grid metrics">
-      <div class="metric"><span>Aguardando revisão</span><strong>${emailReviewEvents.length}</strong></div>
+      <div class="metric"><span>Aguardando revisão</span><strong>${rows.length}</strong></div>
       <div class="metric"><span>Perfil atual</span><strong>${escapeHtml(currentUser.profile)}</strong></div>
       <div class="metric"><span>Ação permitida</span><strong>${allowed ? "Sim" : "Não"}</strong></div>
     </div>
     <div class="email-review-list">
       ${
-        emailReviewEvents.length
-          ? emailReviewEvents.map(emailReviewCard).join("")
-          : `<div class="card pad empty">Nenhum e-mail aguardando revisão no momento.</div>`
+        rows.length
+          ? rows.map(emailReviewCard).join("")
+          : `<div class="card pad empty">Nenhum e-mail aguardando revisão. Os envios manuais seguem direto para a fila de processamento.</div>`
       }
     </div>`;
 }

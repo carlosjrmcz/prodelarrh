@@ -1,16 +1,4 @@
 (function () {
-  const sensitiveTemplates = new Set([
-    "atestado_pendente_rh",
-    "aso_vencendo_rh",
-    "aso_vencido_rh",
-    "dados_bancarios_pendentes_colaborador",
-    "beneficio_pendente_colaborador",
-    "desligamento_documentos_pendentes_colaborador",
-    "desligamento_colaborador_grupo",
-    "novo_colaborador_grupo",
-    "rh_precisa_validar_interno",
-  ]);
-
   function normalizeArray(value) {
     if (!value) return [];
     if (Array.isArray(value)) return value.filter(Boolean);
@@ -22,7 +10,7 @@
 
   function defaultStatus(templateKey, status) {
     if (status) return status;
-    return sensitiveTemplates.has(templateKey) ? "waiting_review" : "pending";
+    return "pending";
   }
 
   function createEmailQueue(supabaseClient) {
