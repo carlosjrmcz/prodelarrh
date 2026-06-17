@@ -16,7 +16,7 @@ const SUPABASE_ANON_KEY = runtimeEnv.VITE_SUPABASE_ANON_KEY || runtimeEnv.VITE_S
 const supabaseUrl = SUPABASE_URL;
 const supabaseKey = SUPABASE_ANON_KEY;
 const SECURE_DRIVE_FILE_FUNCTION_URL = supabaseUrl ? `${supabaseUrl}/functions/v1/download-drive-file` : "";
-const APP_VERSION = "20260617-mobile-pwa-1";
+const APP_VERSION = "20260617-usability-p3-1";
 const PUBLIC_APP_URL = "https://rhprodelar.netlify.app/";
 
 if (window.location.protocol === "file:") {
@@ -656,6 +656,7 @@ const state = {
   authProfile: null,
   authResetQueue: [],
   authPendingEmployeeId: "",
+  dataLoading: false,
   dataStatus: supabaseClient ? "Conectando ao Supabase..." : "Modo local",
 };
 
@@ -1012,6 +1013,110 @@ async function cachedQuery(key, queryFn, ttlMs = 300000) {
     _cache[key] = { data, ts: Date.now() };
   }
   return data;
+}
+
+function setButtonLoading(btn, loading, label) {
+  if (!btn) return;
+  if (loading) {
+    if (!btn.dataset.originalText) btn.dataset.originalText = btn.innerHTML;
+    btn.disabled = true;
+    btn.setAttribute("aria-busy", "true");
+    btn.innerHTML = '<span class="spinner"></span> Aguarde...';
+    return;
+  }
+  btn.disabled = false;
+  btn.removeAttribute("aria-busy");
+  btn.innerHTML = label || btn.dataset.originalText || btn.textContent || "OK";
+  delete btn.dataset.originalText;
+}
+
+function showToast(msg, type = "success", duration = 3500) {
+  const icons = { success: "✓", error: "!", warning: "!", info: "i" };
+  const toast = document.createElement("div");
+  toast.className = `app-toast ${type}`;
+  const icon = document.createElement("span");
+  icon.className = "app-toast-icon";
+  icon.textContent = icons[type] || icons.info;
+  const text = document.createElement("span");
+  text.textContent = msg;
+  toast.append(icon, text);
+  document.body.appendChild(toast);
+  window.setTimeout(() => toast.remove(), duration);
+}
+
+function skeletonCard(lines = 3) {
+  return `<div class="skeleton-card">
+    ${Array.from({ length: lines }, () => '<div class="skeleton-line"></div>').join("")}
+  </div>`;
+}
+
+function renderLoadingPage() {
+  return `
+    <div class="grid metrics">
+      ${skeletonCard(3)}
+      ${skeletonCard(3)}
+      ${skeletonCard(3)}
+    </div>
+    <div class="grid two" style="margin-top:16px">
+      ${skeletonCard(6)}
+      ${skeletonCard(6)}
+    </div>`;
+}
+
+function renderBreadcrumb(items) {
+  const validItems = (items || []).filter((item) => item?.label);
+  if (!validItems.length) return "";
+  return `<nav class="breadcrumb" aria-label="Caminho da tela">
+    ${validItems
+      .map((item, index) => {
+        const isLast = index === validItems.length - 1;
+        const label = escapeHtml(item.label);
+        if (isLast || !item.page) return `<span>${label}</span>`;
+        return `<a href="${pageHref(item.page)}" onclick="return navigate('${item.page}')">${label}</a><span>/</span>`;
+      })
+      .join(" ")}
+  </nav>`;
+}
+
+function renderBreadcrumbForPage(page = state.page) {
+  const parentMap = {
+    employeeDetail: [{ label: "Colaboradores", page: "employees" }],
+    employeeForm: [{ label: "Colaboradores", page: "employees" }],
+    requestForm: [{ label: "Solicitações", page: "requests" }],
+    emailReview: [{ label: "Comunicação RH", page: "emails" }],
+    baseVacations: [{ label: "Gestão de férias", page: "vacations" }],
+  };
+  const currentLabel = titles[page]?.[0] || page || "Tela";
+  const items = page === "portal"
+    ? [{ label: currentLabel }]
+    : [{ label: "Meu portal", page: "portal" }, ...(parentMap[page] || []), { label: currentLabel }];
+  return renderBreadcrumb(items);
+}
+
+function showConfirmModal({ title = "Confirmar ação", message = "", confirmLabel = "Confirmar", cancelLabel = "Cancelar", type = "warning", onConfirm = null } = {}) {
+  document.querySelector(".app-confirm-backdrop")?.remove();
+  const modal = document.createElement("div");
+  modal.className = "modal-backdrop app-confirm-backdrop";
+  modal.innerHTML = `
+    <div class="modal card pad app-confirm-modal" role="dialog" aria-modal="true" aria-label="${escapeHtml(title)}">
+      <div class="section-title">
+        <div>
+          <h2>${escapeHtml(title)}</h2>
+          <p>${escapeHtml(message)}</p>
+        </div>
+        <span class="pill ${type === "danger" ? "danger" : ""}">${type === "danger" ? "Atenção" : "Confirmação"}</span>
+      </div>
+      <div class="form-actions">
+        <button class="btn" type="button" data-confirm-cancel>${escapeHtml(cancelLabel)}</button>
+        <button class="btn ${type === "danger" ? "danger" : "primary"}" type="button" data-confirm-ok>${escapeHtml(confirmLabel)}</button>
+      </div>
+    </div>`;
+  modal.querySelector("[data-confirm-cancel]")?.addEventListener("click", () => modal.remove());
+  modal.querySelector("[data-confirm-ok]")?.addEventListener("click", () => {
+    modal.remove();
+    onConfirm?.();
+  });
+  document.body.appendChild(modal);
 }
 
 function clearMemoryCache(prefix = "") {
@@ -1899,20 +2004,19 @@ function secureDriveQueryKey(sourceType) {
 
 async function openSecureDocument(documentId, action = "view", trigger, sourceType = "employee_document", sourceId = "") {
   if (!SECURE_DRIVE_FILE_FUNCTION_URL || !supabaseClient) {
-    window.alert("Acesso seguro ao Drive ainda não está configurado nesta versão.");
+    showToast("Acesso seguro ao Drive ainda não está configurado nesta versão.", "warning");
     return;
   }
   const { data } = await supabaseClient.auth.getSession();
   const token = data?.session?.access_token || "";
   if (!token) {
-    window.alert("Faça login novamente para visualizar este documento.");
+    showToast("Faça login novamente para visualizar este documento.", "warning");
     return;
   }
 
   const previousLabel = trigger?.textContent;
   if (trigger) {
-    trigger.disabled = true;
-    trigger.textContent = action === "download" ? "Baixando..." : "Abrindo...";
+    setButtonLoading(trigger, true);
   }
 
   if (action === "view") {
@@ -1945,6 +2049,7 @@ async function openSecureDocument(documentId, action = "view", trigger, sourceTy
       link.click();
       link.remove();
       setTimeout(() => URL.revokeObjectURL(objectUrl), 30000);
+      showToast("Download iniciado.", "success");
       return;
     }
 
@@ -1954,12 +2059,11 @@ async function openSecureDocument(documentId, action = "view", trigger, sourceTy
     if (action === "view") {
       showSecureDocumentModal("error", { message: error.message || "Não foi possível abrir o documento." });
     } else {
-      window.alert(error.message || "Não foi possível abrir o documento.");
+      showToast(error.message || "Não foi possível abrir o documento.", "error");
     }
   } finally {
     if (trigger) {
-      trigger.disabled = false;
-      trigger.textContent = previousLabel;
+      setButtonLoading(trigger, false, previousLabel);
     }
   }
 }
@@ -2542,7 +2646,7 @@ function shell(content) {
             <button class="btn ghost" data-action="logout">Sair</button>
           </div>
         </header>
-        <section class="content">${content}</section>
+        <section class="content">${renderBreadcrumbForPage(state.page)}${content}</section>
       </main>
     </div>`;
 }
@@ -2677,6 +2781,7 @@ async function loadSupabaseData() {
 
 async function loadSupabaseDataFresh() {
   if (!supabaseClient) {
+    state.dataLoading = false;
     employees = [];
     requests = [];
     documents = [];
@@ -2702,6 +2807,9 @@ async function loadSupabaseDataFresh() {
   try {
     const previousSignature = runtimeDataSignature;
     const wasAlreadyConnected = state.dataStatus.startsWith("Supabase conectado");
+    const shouldShowSkeleton = state.authChecked && state.authSession && !wasAlreadyConnected;
+    state.dataLoading = shouldShowSkeleton;
+    if (shouldShowSkeleton) renderPage();
     const cachedSupabaseQuery = (key, queryFn, ttlMs = 300000) => cachedQuery(`supabase:${key}`, queryFn, ttlMs);
     const [employeeResult, employeeEmailResult, profileResult, requestResult, vacationResult, documentResult, employeeDocumentResult, timelineResult, emailReviewResult, emailTemplateResult, routineResult, accountingResult, accountingFileResult, announcementResult, driveFolderResult] = await Promise.all([
       cachedSupabaseQuery("hr_employee_directory", () => supabaseClient.from("hr_employee_directory").select("*").order("full_name")),
@@ -2767,6 +2875,7 @@ async function loadSupabaseDataFresh() {
 
     const errors = [employeeResult.error, requestResult.error, vacationResult.error, documentResult.error, employeeDocumentResult.error, timelineResult.error, emailReviewResult.error, emailTemplateResult.error, routineResult.error, accountingResult.error, announcementResult.error].filter(Boolean);
     if (errors.length) {
+      state.dataLoading = false;
       employees = [];
       requests = [];
       documents = [];
@@ -3051,6 +3160,7 @@ async function loadSupabaseDataFresh() {
     applySimulationHierarchy();
     rebuildRuntimeIndexes();
     updateRuntimeDataSignature();
+    state.dataLoading = false;
     state.dataStatus = `Supabase conectado: ${employees.length} colaboradores`;
     saveRuntimeDataCache();
     if (previousSignature && previousSignature === runtimeDataSignature && wasAlreadyConnected && lastRenderedHtml) {
@@ -3058,6 +3168,7 @@ async function loadSupabaseDataFresh() {
     }
     renderPage();
   } catch (error) {
+    state.dataLoading = false;
     employees = [];
     requests = [];
     documents = [];
@@ -9870,6 +9981,7 @@ function commitAppHtml(html, binder) {
   lastRenderedHtml = html;
   binder?.();
   enhanceMobileLayout(app);
+  enhanceUsability(app);
 }
 
 function initMobileMenu() {
@@ -9917,6 +10029,63 @@ function enhanceMobileTables(root = document) {
 function enhanceMobileLayout(root = document) {
   initMobileMenu();
   enhanceMobileTables(root);
+}
+
+const actionLoadingPattern = /(salvar|enviar|confirmar|aprovar|reprovar|descartar|executar|anexar|gerar|criar|inativar|baixar|abrir|fechar)/i;
+
+function autoResetButtonLoading(btn, timeout = 12000) {
+  window.setTimeout(() => {
+    if (!document.body.contains(btn)) return;
+    if (btn.dataset.autoLoading === "true") {
+      btn.dataset.autoLoading = "";
+      setButtonLoading(btn, false);
+    }
+  }, timeout);
+}
+
+function startAutoButtonLoading(btn) {
+  if (!btn || btn.disabled || btn.dataset.noLoading !== undefined) return;
+  btn.dataset.autoLoading = "true";
+  setButtonLoading(btn, true);
+  autoResetButtonLoading(btn);
+}
+
+function bindFormLoadingStates(root = document) {
+  root.querySelectorAll("form").forEach((form) => {
+    if (form.dataset.loadingBound) return;
+    form.dataset.loadingBound = "true";
+    form.addEventListener(
+      "submit",
+      (event) => {
+        if (form.checkValidity && !form.checkValidity()) return;
+        const submitter = event.submitter || form.querySelector("button[type='submit'], .btn[type='submit']");
+        startAutoButtonLoading(submitter);
+      },
+      true,
+    );
+  });
+}
+
+function bindActionButtonLoading(root = document) {
+  root.querySelectorAll("button, .btn").forEach((button) => {
+    if (button.dataset.actionLoadingBound) return;
+    button.dataset.actionLoadingBound = "true";
+    button.addEventListener(
+      "click",
+      () => {
+        if (button.type === "submit") return;
+        const label = button.textContent.trim();
+        if (!actionLoadingPattern.test(label)) return;
+        startAutoButtonLoading(button);
+      },
+      true,
+    );
+  });
+}
+
+function enhanceUsability(root = document) {
+  bindFormLoadingStates(root);
+  bindActionButtonLoading(root);
 }
 
 const pageRenderers = {
@@ -9983,6 +10152,10 @@ function renderPage() {
   if (!canAccessPage(state.page)) {
     state.page = currentUser.homePage;
     updatePageUrl(state.page, true);
+  }
+  if (state.dataLoading) {
+    commitAppHtml(shell(renderLoadingPage()), bind);
+    return;
   }
   const renderer = pageRenderers[state.page] || pageRenderers[currentUser.homePage] || portalPage;
   try {
@@ -10347,6 +10520,11 @@ function openPage(page) {
   renderPage();
 }
 
+function navigate(page, params = {}) {
+  openPage(page, params);
+  return false;
+}
+
 function navigateFromSidebar(page) {
   openPage(page);
   return false;
@@ -10591,10 +10769,16 @@ function handleDelegatedAppClick(event, appRoot) {
     markRoutineCategory("monthly");
     renderPage();
   } else if (dataset.routineCloseMonth !== undefined) {
-    if (window.confirm("Fechar esta competência? O mês será avançado e as rotinas temporárias concluídas ficarão no histórico.")) {
-      closeRoutineMonth();
-      renderPage();
-    }
+    showConfirmModal({
+      title: "Fechar competência",
+      message: "Fechar esta competência? O mês será avançado e as rotinas temporárias concluídas ficarão no histórico.",
+      confirmLabel: "Fechar mês",
+      onConfirm: () => {
+        closeRoutineMonth();
+        showToast("Competência fechada e próxima competência aberta.", "success");
+        renderPage();
+      },
+    });
   } else if (dataset.accountingCompany !== undefined) {
     state.accountingCompany = dataset.accountingCompany || "Prodelar";
     state.accountingMessage = "";
@@ -10824,7 +11008,7 @@ function handleDelegatedAppClick(event, appRoot) {
     updateCommunicationEventStatus(dataset.communicationCancel, "cancelled");
   } else if (dataset.communicationError !== undefined) {
     const event = emailReviewEvents.find((item) => item.id === dataset.communicationError);
-    window.alert(event?.last_error || "NÃO ENCONTRADO");
+    showToast(event?.last_error || "NÃO ENCONTRADO", event?.last_error ? "error" : "warning", 6000);
   } else if (dataset.temporaryRoutineClose !== undefined) {
     closeTemporaryRoutine(dataset.temporaryRoutineClose);
     renderPage();

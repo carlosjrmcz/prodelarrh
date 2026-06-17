@@ -533,6 +533,154 @@ button {
   margin-bottom: 14px;
 }
 
+.spinner {
+  animation: spin 0.7s linear infinite;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-radius: 50%;
+  border-top-color: #fff;
+  display: inline-block;
+  height: 14px;
+  margin-right: 4px;
+  vertical-align: middle;
+  width: 14px;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.app-toast {
+  align-items: center;
+  animation: slideIn 0.3s ease;
+  background: #0c447c;
+  border-radius: 8px;
+  bottom: 24px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+  color: #fff;
+  display: flex;
+  font-family: Arial, sans-serif;
+  font-size: 13px;
+  gap: 8px;
+  max-width: 320px;
+  padding: 12px 18px;
+  position: fixed;
+  right: 24px;
+  z-index: 9998;
+}
+
+.app-toast.success {
+  background: #1a5c3a;
+}
+
+.app-toast.error {
+  background: #a32d2d;
+}
+
+.app-toast.warning {
+  background: #854f0b;
+}
+
+.app-toast.info {
+  background: #0c447c;
+}
+
+.app-toast-icon {
+  align-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  border-radius: 999px;
+  display: inline-flex;
+  flex: 0 0 18px;
+  font-size: 11px;
+  font-weight: 900;
+  height: 18px;
+  justify-content: center;
+  width: 18px;
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateX(100%);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.skeleton-card {
+  background: #fff;
+  border: 1px solid #e8edf0;
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.skeleton-line {
+  animation: shimmer 1.5s infinite;
+  background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+  background-size: 200% 100%;
+  border-radius: 4px;
+  height: 14px;
+  margin-bottom: 10px;
+}
+
+.skeleton-line:last-child {
+  margin-bottom: 0;
+  width: 60%;
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+.breadcrumb {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 12px;
+  gap: 7px;
+  margin: -6px 0 16px;
+}
+
+.breadcrumb a {
+  color: var(--brand);
+  cursor: pointer;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.breadcrumb a:hover {
+  text-decoration: underline;
+}
+
+.breadcrumb span:last-child {
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.app-confirm-backdrop {
+  z-index: 10030;
+}
+
+.app-confirm-modal {
+  width: min(560px, 100%);
+}
+
+.app-confirm-modal .form-actions {
+  justify-content: flex-end;
+  margin-top: 18px;
+}
+
 .content {
   padding: 28px;
 }
