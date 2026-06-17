@@ -2135,6 +2135,101 @@ button {
   flex-wrap: wrap;
 }
 
+.secure-document-backdrop {
+  z-index: 10020;
+  place-items: stretch;
+  padding: 28px;
+}
+
+.secure-document-modal {
+  width: min(1180px, 100%);
+  height: min(860px, calc(100vh - 56px));
+  max-height: calc(100vh - 56px);
+  overflow: hidden;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  box-shadow: 0 24px 60px rgba(10, 23, 33, 0.24);
+}
+
+.secure-document-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  background: #1a5c3a;
+  color: #fff;
+  border-bottom: 4px solid #e87722;
+  padding: 14px 16px;
+}
+
+.secure-document-header span {
+  display: block;
+  font-size: 12px;
+  opacity: 0.8;
+}
+
+.secure-document-header strong {
+  display: block;
+  font-size: 15px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.secure-document-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.secure-document-body {
+  min-height: 0;
+  background: #eef3f5;
+  overflow: auto;
+}
+
+.secure-document-frame {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: white;
+}
+
+.secure-document-image-wrap {
+  min-height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.secure-document-image-wrap img {
+  max-width: 100%;
+  max-height: calc(100vh - 160px);
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 12px 32px rgba(20, 32, 51, 0.14);
+}
+
+.secure-document-state {
+  margin: 28px auto;
+  max-width: 520px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 22px;
+  text-align: center;
+}
+
+.secure-document-state.error {
+  border-color: #efb0a4;
+  background: #fff4f1;
+  color: #7d2f20;
+}
+
 .master-editor-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2674,6 +2769,21 @@ td {
   background: var(--soft-brand);
   border-color: var(--brand);
   color: var(--brand-dark);
+}
+
+.ticket-attachment {
+  display: grid;
+  gap: 6px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  padding: 8px;
+  background: #f7fbfc;
+}
+
+.ticket-attachment .inline-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
 .process-flow {

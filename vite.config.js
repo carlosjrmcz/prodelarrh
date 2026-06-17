@@ -104,6 +104,33 @@ export default defineConfig({
   server: {
     host: "127.0.0.1",
   },
+  build: {
+    target: "es2015",
+    minify: "terser",
+    terserOptions: {
+      compress: {
+        drop_console: true,
+        drop_debugger: true,
+        pure_funcs: ["console.log", "console.warn", "console.info"],
+      },
+    },
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          "vendor-supabase": ["@supabase/supabase-js"],
+        },
+        chunkFileNames: "assets/[name]-[hash].js",
+        entryFileNames: "assets/[name]-[hash].js",
+        assetFileNames: "assets/[name]-[hash].[ext]",
+      },
+    },
+    cssCodeSplit: true,
+    sourcemap: false,
+    reportCompressedSize: true,
+  },
+  optimizeDeps: {
+    include: ["@supabase/supabase-js"],
+  },
   plugins: [
     {
       name: "prodelar-rh-routine-api",

@@ -5,6 +5,12 @@ import { transform } from "esbuild";
 
 const root = process.cwd();
 const dist = path.join(root, "dist");
+const scriptMinifyOptions = {
+  minify: true,
+  legalComments: "none",
+  target: "es2020",
+  drop: ["console", "debugger"],
+};
 
 function hashContent(content) {
   return crypto.createHash("sha256").update(content).digest("hex").slice(0, 10);
@@ -73,11 +79,7 @@ function rewriteAssetUrls(source, assetMap) {
 
 async function minifyScript(source, target, assetMap = new Map()) {
   const code = rewriteAssetUrls(await fs.readFile(path.join(root, source), "utf8"), assetMap);
-  const minified = await transform(code, {
-    minify: true,
-    legalComments: "none",
-    target: "es2020",
-  });
+  const minified = await transform(code, scriptMinifyOptions);
   const hashed = hashedTarget(target, minified.code);
   await writeFile(hashed, minified.code);
   return hashed;

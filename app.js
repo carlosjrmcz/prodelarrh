@@ -15,7 +15,8 @@ const SUPABASE_URL = runtimeEnv.VITE_SUPABASE_URL || "";
 const SUPABASE_ANON_KEY = runtimeEnv.VITE_SUPABASE_ANON_KEY || runtimeEnv.VITE_SUPABASE_PUBLISHABLE_KEY || "";
 const supabaseUrl = SUPABASE_URL;
 const supabaseKey = SUPABASE_ANON_KEY;
-const APP_VERSION = "20260617-employee-drive-org";
+const SECURE_DRIVE_FILE_FUNCTION_URL = supabaseUrl ? `${supabaseUrl}/functions/v1/download-drive-file` : "";
+const APP_VERSION = "20260617-prod-build-opt-1";
 const PUBLIC_APP_URL = "https://rhprodelar.netlify.app/";
 
 if (window.location.protocol === "file:") {
@@ -672,6 +673,7 @@ let emailReviewEvents = [];
 let emailTemplateRows = [];
 let monthlyRoutineRows = [];
 let accountingPackageRows = [];
+let accountingFileRows = [];
 let announcementRows = [];
 let vacationSearchDebounce = null;
 let lightweightRenderTimer = null;
@@ -995,15 +997,35 @@ function normalizeEmailQueueStatus(status) {
   return status === "waiting_review" ? "pending" : (status || "");
 }
 
-const runtimeCacheKey = "rhRuntimeDataCache:v3";
+const runtimeCacheKey = "rhRuntimeDataCache:v4";
 const runtimeCacheTtlMs = 30 * 60 * 1000;
+const _cache = {};
 let supabaseLoadInFlight = null;
+
+async function cachedQuery(key, queryFn, ttlMs = 300000) {
+  const hit = _cache[key];
+  if (hit && Date.now() - hit.ts < ttlMs) {
+    return hit.data;
+  }
+  const data = await queryFn();
+  if (!data?.error) {
+    _cache[key] = { data, ts: Date.now() };
+  }
+  return data;
+}
+
+function clearMemoryCache(prefix = "") {
+  Object.keys(_cache).forEach((key) => {
+    if (!prefix || key.startsWith(prefix)) delete _cache[key];
+  });
+}
 
 function hasCommunicationTemplates(rows = emailTemplateRows) {
   return Array.isArray(rows) && rows.some((row) => row && row.template_key);
 }
 
 function clearRuntimeDataCache() {
+  clearMemoryCache();
   try {
     localStorage.removeItem(runtimeCacheKey);
   } catch {
@@ -1031,6 +1053,10 @@ function applyRuntimeDataCache(cache) {
     ? cache.emailReviewEvents.map((event) => ({ ...event, status: normalizeEmailQueueStatus(event.status) }))
     : [];
   emailTemplateRows = Array.isArray(cache.emailTemplateRows) ? cache.emailTemplateRows : [];
+  monthlyRoutineRows = Array.isArray(cache.monthlyRoutineRows) ? cache.monthlyRoutineRows : [];
+  accountingPackageRows = Array.isArray(cache.accountingPackageRows) ? cache.accountingPackageRows : [];
+  accountingFileRows = Array.isArray(cache.accountingFileRows) ? cache.accountingFileRows : [];
+  announcementRows = Array.isArray(cache.announcementRows) ? cache.announcementRows : [];
   applySimulationHierarchy();
   rebuildRuntimeIndexes();
   updateRuntimeDataSignature();
@@ -1063,6 +1089,10 @@ function saveRuntimeDataCache() {
         driveFolderRecords,
         emailReviewEvents,
         emailTemplateRows,
+        monthlyRoutineRows,
+        accountingPackageRows,
+        accountingFileRows,
+        announcementRows,
       }),
     );
   } catch {
@@ -1635,10 +1665,6 @@ function driveWebUrlFromId(folderOrFileId) {
   return folderOrFileId ? `https://drive.google.com/drive/folders/${folderOrFileId}` : "";
 }
 
-function driveFileWebUrl(fileId) {
-  return fileId ? `https://drive.google.com/file/d/${fileId}/view` : "";
-}
-
 function driveCompanyCode(company) {
   const key = normalizeText(company);
   if (key.includes("COLMOB")) return "COLMOB";
@@ -1718,7 +1744,224 @@ function safeDrivePathPart(value) {
 function driveFolderAnchor(recordOrUrl, label = "Abrir pasta") {
   const url = typeof recordOrUrl === "string" ? recordOrUrl : driveFolderUrl(recordOrUrl);
   if (!url) return `<span class="muted">Pasta não indexada</span>`;
-  return `<a class="btn small" href="${escapeHtml(url)}" target="_blank" rel="noreferrer">${escapeHtml(label)}</a>`;
+  const safeLabel = label.replace(/^Abrir\s*/i, "").trim() || "Pasta";
+  return `<span class="muted" title="${escapeHtml(url)}">${escapeHtml(safeLabel)} técnico protegido</span>`;
+}
+
+function hasSecureDocumentFile(doc) {
+  return Boolean((doc?.id || doc?.secure_source_id) && (doc.drive_file_id || doc.file_url || doc.storage_path || doc.secure_has_file));
+}
+
+function secureDocumentButton(doc, action = "view", label = "Visualizar") {
+  if (!hasSecureDocumentFile(doc)) return "";
+  const sourceType = doc.secure_source_type || "employee_document";
+  const sourceId = doc.secure_source_id || doc.id || "";
+  const legacyDocumentAttr = sourceType === "employee_document" ? ` data-secure-document="${escapeHtml(sourceId)}"` : "";
+  return `<button type="button" class="btn small"${legacyDocumentAttr} data-secure-source-type="${escapeHtml(sourceType)}" data-secure-source-id="${escapeHtml(sourceId)}" data-secure-document-action="${escapeHtml(action)}">${escapeHtml(label)}</button>`;
+}
+
+function secureDocumentActions(doc) {
+  if (!hasSecureDocumentFile(doc)) return `<span class="muted">Arquivo não liberado</span>`;
+  return `${secureDocumentButton(doc, "view", "Visualizar")} ${secureDocumentButton(doc, "download", "Baixar")}`;
+}
+
+function filenameFromDisposition(header, fallback = "documento-rh") {
+  const text = String(header || "");
+  const encoded = text.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+  if (encoded) {
+    try {
+      return decodeURIComponent(encoded);
+    } catch {
+      return encoded;
+    }
+  }
+  return text.match(/filename="?([^";]+)"?/i)?.[1] || fallback;
+}
+
+function blobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(reader.error || new Error("Falha ao preparar visualização do documento."));
+    reader.readAsDataURL(blob);
+  });
+}
+
+function closeSecureDocumentModal() {
+  document.getElementById("secure-document-modal")?.remove();
+}
+
+function showSecureDocumentModal(state = "loading", details = {}) {
+  closeSecureDocumentModal();
+  const title = details.filename || "Documento RH";
+  const safeTitle = escapeHtml(title);
+  const message = escapeHtml(details.message || "");
+  const fileUrl = details.fileUrl || "";
+  const mimeType = String(details.mimeType || "").toLowerCase();
+  const canDownload = Boolean(fileUrl && state === "ready");
+  let body = `<div class="secure-document-state">${message || "Validando permissão e carregando o arquivo..."}</div>`;
+
+  if (state === "ready") {
+    if (mimeType.includes("pdf")) {
+      body = `<iframe class="secure-document-frame" title="${safeTitle}" src="${fileUrl}"></iframe>`;
+    } else if (mimeType.startsWith("image/")) {
+      body = `<div class="secure-document-image-wrap"><img alt="${safeTitle}" src="${fileUrl}" /></div>`;
+    } else {
+      body = `<div class="secure-document-state"><p>Documento pronto.</p><a class="btn primary" href="${fileUrl}" download="${safeTitle}">Baixar arquivo</a></div>`;
+    }
+  }
+
+  if (state === "error") {
+    body = `<div class="secure-document-state error"><strong>Não foi possível abrir o documento.</strong><p>${message}</p></div>`;
+  }
+
+  const modal = document.createElement("div");
+  modal.id = "secure-document-modal";
+  modal.className = "modal-backdrop secure-document-backdrop";
+  modal.innerHTML = `
+    <section class="modal secure-document-modal" role="dialog" aria-modal="true" aria-label="Documento seguro">
+      <header class="secure-document-header">
+        <div>
+          <span>Arquivo seguro do RH</span>
+          <strong>${safeTitle}</strong>
+        </div>
+        <div class="secure-document-actions">
+          ${canDownload ? `<a class="btn small" href="${fileUrl}" download="${safeTitle}">Baixar</a>` : ""}
+          <button class="btn small" type="button" data-secure-document-close>Fechar</button>
+        </div>
+      </header>
+      <div class="secure-document-body">${body}</div>
+    </section>
+  `;
+  modal.addEventListener("click", (event) => {
+    if (event.target === modal || event.target.closest("[data-secure-document-close]")) {
+      closeSecureDocumentModal();
+    }
+  });
+  document.body.appendChild(modal);
+}
+
+function writeSecureDocumentWindow(targetWindow, state, details = {}) {
+  if (!targetWindow || targetWindow.closed) return;
+  const title = details.filename || "Documento RH";
+  const safeTitle = escapeHtml(title);
+  const message = escapeHtml(details.message || "");
+  const fileUrl = details.fileUrl || "";
+  const mimeType = String(details.mimeType || "").toLowerCase();
+  let content = `<div class="state">${message || "Preparando documento seguro..."}</div>`;
+
+  if (state === "ready") {
+    if (mimeType.includes("pdf")) {
+      content = `<iframe title="${safeTitle}" src="${fileUrl}"></iframe>`;
+    } else if (mimeType.startsWith("image/")) {
+      content = `<main><img alt="${safeTitle}" src="${fileUrl}"></main>`;
+    } else {
+      content = `<main class="state"><p>Documento pronto.</p><a href="${fileUrl}" download="${safeTitle}">Baixar ${safeTitle}</a></main>`;
+    }
+  }
+
+  if (state === "error") {
+    content = `<main class="state error"><strong>Não foi possível abrir o documento.</strong><p>${message}</p></main>`;
+  }
+
+  targetWindow.document.open();
+  targetWindow.document.write(`<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${safeTitle}</title>
+  <style>
+    body{margin:0;background:#eef3f5;color:#142033;font-family:Arial,sans-serif}
+    header{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:14px 18px;background:#1a5c3a;color:#fff;border-bottom:4px solid #e87722}
+    header strong{font-size:15px} header span{font-size:12px;opacity:.82}
+    iframe{width:100vw;height:calc(100vh - 58px);border:0;background:#fff}
+    main{min-height:calc(100vh - 58px);display:flex;align-items:center;justify-content:center;padding:24px}
+    img{max-width:96vw;max-height:calc(100vh - 110px);background:#fff;border:1px solid #d9e2ea;border-radius:6px;box-shadow:0 10px 24px rgba(20,32,51,.12)}
+    .state{margin:28px auto;max-width:520px;background:#fff;border:1px solid #d9e2ea;border-radius:8px;padding:22px;text-align:center}
+    .error{border-color:#efb0a4;background:#fff4f1;color:#7d2f20}
+    a{display:inline-block;margin-top:10px;border-radius:6px;background:#1f7a6c;color:#fff;padding:10px 16px;text-decoration:none;font-weight:700}
+  </style>
+</head>
+<body>
+  <header><strong>${safeTitle}</strong><span>Arquivo seguro do RH</span></header>
+  ${content}
+</body>
+</html>`);
+  targetWindow.document.close();
+}
+
+function secureDriveQueryKey(sourceType) {
+  if (sourceType === "request_attachment") return "request_attachment_id";
+  if (sourceType === "accounting_file") return "accounting_file_id";
+  return "document_id";
+}
+
+async function openSecureDocument(documentId, action = "view", trigger, sourceType = "employee_document", sourceId = "") {
+  if (!SECURE_DRIVE_FILE_FUNCTION_URL || !supabaseClient) {
+    window.alert("Acesso seguro ao Drive ainda não está configurado nesta versão.");
+    return;
+  }
+  const { data } = await supabaseClient.auth.getSession();
+  const token = data?.session?.access_token || "";
+  if (!token) {
+    window.alert("Faça login novamente para visualizar este documento.");
+    return;
+  }
+
+  const previousLabel = trigger?.textContent;
+  if (trigger) {
+    trigger.disabled = true;
+    trigger.textContent = action === "download" ? "Baixando..." : "Abrindo...";
+  }
+
+  if (action === "view") {
+    showSecureDocumentModal("loading", { message: "Validando permissão e carregando o arquivo..." });
+  }
+
+  try {
+    const url = new URL(SECURE_DRIVE_FILE_FUNCTION_URL);
+    url.searchParams.set(secureDriveQueryKey(sourceType), sourceId || documentId);
+    url.searchParams.set("action", action);
+    const response = await fetch(url.toString(), {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        apikey: supabaseKey,
+      },
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.error || body.reason || `Falha ao abrir documento (${response.status})`);
+    }
+    const blob = await response.blob();
+    const filename = filenameFromDisposition(response.headers.get("Content-Disposition"), `documento-rh.${blob.type === "application/pdf" ? "pdf" : "bin"}`);
+
+    if (action === "download") {
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(objectUrl), 30000);
+      return;
+    }
+
+    const dataUrl = await blobToDataUrl(blob);
+    showSecureDocumentModal("ready", { fileUrl: dataUrl, filename, mimeType: blob.type });
+  } catch (error) {
+    if (action === "view") {
+      showSecureDocumentModal("error", { message: error.message || "Não foi possível abrir o documento." });
+    } else {
+      window.alert(error.message || "Não foi possível abrir o documento.");
+    }
+  } finally {
+    if (trigger) {
+      trigger.disabled = false;
+      trigger.textContent = previousLabel;
+    }
+  }
 }
 
 function driveContextForDocument(employee, documentType, sensitivity = "employee_private") {
@@ -2442,6 +2685,7 @@ async function loadSupabaseDataFresh() {
     emailTemplateRows = [];
     monthlyRoutineRows = [];
     accountingPackageRows = [];
+    accountingFileRows = [];
     announcementRows = [];
     applySimulationHierarchy();
     state.dataStatus = "Supabase indisponível";
@@ -2452,10 +2696,11 @@ async function loadSupabaseDataFresh() {
   try {
     const previousSignature = runtimeDataSignature;
     const wasAlreadyConnected = state.dataStatus.startsWith("Supabase conectado");
-    const [employeeResult, employeeEmailResult, profileResult, requestResult, vacationResult, documentResult, employeeDocumentResult, timelineResult, emailReviewResult, emailTemplateResult, routineResult, accountingResult, announcementResult, driveFolderResult] = await Promise.all([
-      supabaseClient.from("hr_employee_directory").select("*").order("full_name"),
-      supabaseClient.from("hr_employees").select("id,email"),
-      supabaseClient.from("hr_profiles").select("employee_id,role_code,is_active"),
+    const cachedSupabaseQuery = (key, queryFn, ttlMs = 300000) => cachedQuery(`supabase:${key}`, queryFn, ttlMs);
+    const [employeeResult, employeeEmailResult, profileResult, requestResult, vacationResult, documentResult, employeeDocumentResult, timelineResult, emailReviewResult, emailTemplateResult, routineResult, accountingResult, accountingFileResult, announcementResult, driveFolderResult] = await Promise.all([
+      cachedSupabaseQuery("hr_employee_directory", () => supabaseClient.from("hr_employee_directory").select("*").order("full_name")),
+      cachedSupabaseQuery("hr_employees_email", () => supabaseClient.from("hr_employees").select("id,email")),
+      cachedSupabaseQuery("hr_profiles_roles", () => supabaseClient.from("hr_profiles").select("employee_id,role_code,is_active")),
       supabaseClient
         .from("hr_requests")
         .select("id,protocol_number,status,title,description,due_at,created_at,raw_data,request_type:hr_request_types(name),employee:hr_employees!hr_requests_employee_id_fkey(full_name),company:hr_companies(name)")
@@ -2466,7 +2711,7 @@ async function loadSupabaseDataFresh() {
           "id,acquisition_start,acquisition_end,legal_limit_date,balance_days,planned_start,planned_end,status,source_competence_month,raw_import,employee:hr_employees(employee_code,full_name,cpf,company:hr_companies(code,name),department:hr_departments(name),position:hr_positions(name))",
         )
         .order("legal_limit_date"),
-      supabaseClient.from("hr_document_types").select("name,category,default_sensitivity").order("category"),
+      cachedSupabaseQuery("hr_document_types", () => supabaseClient.from("hr_document_types").select("name,category,default_sensitivity").order("category")),
       supabaseClient
         .from("hr_employee_documents")
         .select(
@@ -2484,10 +2729,10 @@ async function loadSupabaseDataFresh() {
         .in("status", ["waiting_review", "pending", "processing", "sent", "failed", "cancelled"])
         .order("created_at", { ascending: false })
         .limit(300),
-      supabaseClient
+      cachedSupabaseQuery("email_templates_recursos_humanos", () => supabaseClient
         .from("email_templates")
         .select("template_key,module_name,recipient_type,subject_template,body_template,body_html_template,delivery_channel,audience_scope,requires_review,is_active")
-        .eq("app_name", "recursos_humanos"),
+        .eq("app_name", "recursos_humanos"), 600000),
       supabaseClient
         .from("hr_monthly_routines")
         .select("id,company_id,competence_month,routine_key,routine_name,status,source_mode,original_file_name,processed_by,processed_at,raw_result,category,title,description,due_date,notes,created_at,updated_at")
@@ -2499,14 +2744,19 @@ async function loadSupabaseDataFresh() {
         .order("updated_at", { ascending: false })
         .limit(240),
       supabaseClient
+        .from("hr_accounting_package_files")
+        .select("id,accounting_package_id,company_id,competence_month,item_key,item_title,required,status,original_file_name,file_name,storage_bucket,storage_path,drive_file_id,file_url,file_size_bytes,mime_type,metadata,raw_metadata,uploaded_by,uploaded_at,created_at,updated_at")
+        .order("updated_at", { ascending: false })
+        .limit(500),
+      supabaseClient
         .from("hr_announcements")
         .select("id,company_id,department_id,target_employee_id,template_key,delivery_channel,title,body,payload,status,published_at,expires_at,created_by,created_at,updated_at")
         .order("created_at", { ascending: false })
         .limit(300),
-      supabaseClient
+      cachedSupabaseQuery("hr_drive_folders", () => supabaseClient
         .from("hr_drive_folders")
         .select("id,folder_type,folder_name,drive_folder_id,drive_folder_url,parent_folder_id,employee_id,company_id,competence_month,created_at")
-        .order("folder_name"),
+        .order("folder_name"), 600000),
     ]);
 
     const errors = [employeeResult.error, requestResult.error, vacationResult.error, documentResult.error, employeeDocumentResult.error, timelineResult.error, emailReviewResult.error, emailTemplateResult.error, routineResult.error, accountingResult.error, announcementResult.error].filter(Boolean);
@@ -2525,6 +2775,7 @@ async function loadSupabaseDataFresh() {
       emailTemplateRows = [];
       monthlyRoutineRows = [];
       accountingPackageRows = [];
+      accountingFileRows = [];
       announcementRows = [];
       applySimulationHierarchy();
       state.dataStatus = `Supabase conectado, aguardando ajuste de base: ${errors[0].message}`;
@@ -2535,6 +2786,7 @@ async function loadSupabaseDataFresh() {
     if (profileResult.error) console.warn("Perfis não carregados para hierarquia visual:", profileResult.error.message);
     if (employeeEmailResult.error) console.warn("E-mails de colaboradores não carregados:", employeeEmailResult.error.message);
     if (driveFolderResult.error) console.warn("Índice do Google Drive não carregado:", driveFolderResult.error.message);
+    if (accountingFileResult.error) console.warn("Arquivos do pacote mensal não carregados:", accountingFileResult.error.message);
     const profileByEmployeeId = new Map((profileResult.data || []).map((profile) => [profile.employee_id, profile]));
     const emailByEmployeeId = new Map((employeeEmailResult.data || []).map((employee) => [employee.id, employee.email || ""]));
     employees = (employeeResult.data || []).map((row) => {
@@ -2646,6 +2898,8 @@ async function loadSupabaseDataFresh() {
         status: row.status || "Registrado",
         file_name: row.file_name || "",
         file_url: row.file_url || "",
+        drive_file_id: row.drive_file_id || "",
+        storage_path: row.storage_path || "",
       }));
     employeeTimelineEvents = (timelineResult.data || []).map((row) => ({
       id: row.id,
@@ -2743,6 +2997,32 @@ async function loadSupabaseDataFresh() {
       created_at: row.created_at || "",
       updated_at: row.updated_at || "",
     }));
+    accountingFileRows = (accountingFileResult.error ? [] : accountingFileResult.data || []).map((row) => ({
+      id: row.id,
+      accounting_package_id: row.accounting_package_id || "",
+      company_id: row.company_id || "",
+      company: companyKeyFromId(row.company_id),
+      competence_month: row.competence_month || "",
+      competence: monthKeyFromDate(row.competence_month),
+      item_key: row.item_key || "",
+      item_title: row.item_title || "",
+      required: row.required !== false,
+      status: row.status || "",
+      original_file_name: row.original_file_name || "",
+      file_name: row.file_name || row.original_file_name || "",
+      storage_bucket: row.storage_bucket || "",
+      storage_path: row.storage_path || "",
+      drive_file_id: row.drive_file_id || "",
+      file_url: row.file_url || "",
+      file_size_bytes: row.file_size_bytes || null,
+      mime_type: row.mime_type || "",
+      metadata: row.metadata || {},
+      raw_metadata: row.raw_metadata || {},
+      uploaded_by: row.uploaded_by || "",
+      uploaded_at: row.uploaded_at || "",
+      created_at: row.created_at || "",
+      updated_at: row.updated_at || "",
+    }));
     announcementRows = (announcementResult.data || []).map((row) => ({
       id: row.id,
       company_id: row.company_id || "",
@@ -2782,11 +3062,12 @@ async function loadSupabaseDataFresh() {
     employeeDocumentRecords = [];
     employeeTimelineEvents = [];
     driveFolderRecords = [];
-    emailReviewEvents = [];
-    emailTemplateRows = [];
-    monthlyRoutineRows = [];
-    accountingPackageRows = [];
-    announcementRows = [];
+      emailReviewEvents = [];
+      emailTemplateRows = [];
+      monthlyRoutineRows = [];
+      accountingPackageRows = [];
+      accountingFileRows = [];
+      announcementRows = [];
     applySimulationHierarchy();
     state.dataStatus = `Erro de conexão: ${error.message}`;
     renderPage();
@@ -3347,13 +3628,10 @@ function employeeDocuments(employee) {
             ? rows
                 .map(
                   (doc) => {
-                    const fileUrl = doc.file_url || driveFileWebUrl(doc.drive_file_id);
-                    const folderUrl = doc.drive_folder_url || (doc.drive_folder_id ? driveWebUrlFromId(doc.drive_folder_id) : driveDestinationForEmployee(employee, doc.type || doc.title).folderUrl);
                     return `<div class="doc employee-doc-row">
                       <div><strong>${escapeHtml(doc.title || doc.type)}</strong><span>${escapeHtml([doc.file_name, doc.description, doc.created_at ? formatDateTime(doc.created_at) : ""].filter(Boolean).join(" · "))}</span></div>
                       <div class="doc-actions">
-                        ${fileUrl ? `<a class="btn small" href="${escapeHtml(fileUrl)}" target="_blank" rel="noreferrer">Abrir arquivo</a>` : ""}
-                        ${folderUrl ? `<a class="btn small" href="${escapeHtml(folderUrl)}" target="_blank" rel="noreferrer">Pasta Drive</a>` : ""}
+                        ${secureDocumentActions(doc)}
                         ${statusPill(doc.status || doc.validation_status || "Registrado")}
                       </div>
                     </div>`;
@@ -3434,8 +3712,7 @@ function employeeDrive(employee) {
               ? docs.map((doc) => `<div class="doc employee-doc-row">
                   <div><strong>${escapeHtml(doc.title)}</strong><span>${escapeHtml([doc.file_name, doc.type, doc.created_at ? formatDateTime(doc.created_at) : ""].filter(Boolean).join(" · "))}</span></div>
                   <div class="doc-actions">
-                    ${(doc.file_url || doc.drive_file_id) ? `<a class="btn small" href="${escapeHtml(doc.file_url || driveFileWebUrl(doc.drive_file_id))}" target="_blank" rel="noreferrer">Abrir arquivo</a>` : ""}
-                    ${driveFolderAnchor(doc.drive_folder_url || driveDestinationForEmployee(employee, doc.type || doc.title).folderUrl, "Pasta")}
+                    ${secureDocumentActions(doc)}
                   </div>
                 </div>`).join("")
               : `<div class="empty">Nenhum arquivo vinculado ainda.</div>`
@@ -3864,6 +4141,7 @@ function requestsPage() {
                 <span>${request.type} · ${request.employee}</span>
                 <p>${request.title}</p>
                 <div class="ticket-meta"><span>Com: ${request.owner}</span><span>Próximo: ${request.next || "Diretoria"}</span></div>
+                ${requestAttachmentActions(request)}
 	                <div class="request-flow-mini">
 	                  ${["Sup.", "Ger.", "Dir.", "RH"].map((step, index) => {
 	                    const full = ["Supervisor", "Gerência", "Diretoria", "RH"][index];
@@ -3880,6 +4158,33 @@ function requestsPage() {
         .join("")}
     </div>
     ${requestHistoryPanel(scopedHistoryRequests)}`;
+}
+
+function requestAttachmentActions(request) {
+  const raw = request.rawData || {};
+  const documentId = raw.attachment_document_id || "";
+  const attachmentId = raw.attachment_id || "";
+  const fileName = raw.attachment_name || "";
+  const driveFileId = raw.drive_file_id || "";
+  const fileUrl = raw.drive_view_url || "";
+  if (!documentId && !attachmentId && !fileName) return "";
+  const actions = documentId
+    ? secureDocumentActions({
+        id: documentId,
+        file_name: fileName,
+        drive_file_id: driveFileId,
+        file_url: fileUrl,
+        secure_has_file: true,
+      })
+    : secureDocumentActions({
+        secure_source_type: "request_attachment",
+        secure_source_id: attachmentId,
+        file_name: fileName,
+        drive_file_id: driveFileId,
+        file_url: fileUrl,
+        secure_has_file: Boolean(attachmentId),
+      });
+  return `<div class="ticket-attachment"><span>${escapeHtml(fileName || "Anexo da solicitação")}</span><span class="inline-actions">${actions}</span></div>`;
 }
 
 function requestHistoryPanel(rows) {
@@ -5232,7 +5537,26 @@ function accountingPackageStatus(company = accountingCompany(), competence = acc
         at: row.processed_at || row.updated_at || row.created_at,
         by: row.raw_result?.by || "Supabase",
         drivePath: row.raw_result?.drive_path || accountingDrivePath(company, competence),
+        accountingFileId: row.raw_result?.accounting_file_id || "",
+        driveFileId: row.raw_result?.drive_file_id || "",
+        fileUrl: row.raw_result?.file_url || "",
+        storagePath: row.raw_result?.storage_path || "",
         dbId: row.id,
+      };
+    });
+  accountingFileRows
+    .filter((row) => row.company === company && row.competence === competence)
+    .forEach((row) => {
+      store[accountingPackageKey(company, competence, row.item_key)] = {
+        done: String(row.status || "").toLowerCase() !== "cancelled",
+        fileName: row.file_name || row.original_file_name || row.item_title,
+        at: row.uploaded_at || row.updated_at || row.created_at,
+        by: row.uploaded_by || "Supabase",
+        drivePath: row.raw_metadata?.drive_path || accountingDrivePath(company, competence),
+        accountingFileId: row.id,
+        driveFileId: row.drive_file_id || "",
+        fileUrl: row.file_url || "",
+        storagePath: row.storage_path || "",
       };
     });
   const items = accountingPackageItems();
@@ -5248,6 +5572,26 @@ function accountingPackageStatus(company = accountingCompany(), competence = acc
 
 function accountingDrivePath(company = accountingCompany(), competence = accountingCompetence()) {
   return `RH Prodelar/Pacote mensal contabilidade/${competence}/${company}/`;
+}
+
+function accountingPackageDriveFolder(company = accountingCompany(), competence = accountingCompetence()) {
+  return (
+    driveFolderRecords.find((folder) => folder.folder_type === "pacote_mensal_competencia" && folder.competence_month === competence) ||
+    driveFolderRecords.find((folder) => folder.folder_type === "pacote_mensal") ||
+    driveRootFolder()
+  );
+}
+
+function accountingPackageDriveContext(company, competence, item) {
+  const folder = accountingPackageDriveFolder(company, competence);
+  return {
+    company,
+    documentType: `Pacote mensal - ${item.title}`,
+    sensitivity: "hr_restricted",
+    sharingMode: "restricted",
+    driveFolderId: folder?.drive_folder_id || googleWorkspaceConfig.rootFolderId || "",
+    driveDestinationPath: accountingDrivePath(company, competence),
+  };
 }
 
 async function persistAccountingPackageItem(company, competence, item, status) {
@@ -5267,6 +5611,11 @@ async function persistAccountingPackageItem(company, competence, item, status) {
     raw_result: {
       module_name: "pacote_mensal",
       drive_path: status.drivePath,
+      accounting_file_id: status.accountingFileId || "",
+      drive_file_id: status.driveFileId || "",
+      file_url: status.fileUrl || "",
+      storage_path: status.storagePath || "",
+      file_name: status.fileName || "",
       item_key: item.key,
       required: item.required,
     },
@@ -5300,6 +5649,64 @@ async function persistAccountingPackageItem(company, competence, item, status) {
   if (execution.error) console.error("Erro ao registrar execução do pacote mensal", execution.error);
 }
 
+async function persistAccountingPackageFile(company, competence, item, status) {
+  if (!supabaseClient) return null;
+  const companyId = routineCompanyId(company);
+  if (!companyId) return null;
+  const { data: packageRow, error: packageError } = await supabaseClient
+    .from("hr_accounting_packages")
+    .upsert({
+      company_id: companyId,
+      competence_month: `${competence}-01`,
+      status: "in_review",
+      notes: `Atualizado por ${currentUser.name}`,
+    }, { onConflict: "company_id,competence_month" })
+    .select("id")
+    .single();
+  if (packageError) {
+    console.warn("Pacote mensal sem linha de resumo para arquivo:", packageError.message);
+  }
+  const { data, error } = await supabaseClient
+    .from("hr_accounting_package_files")
+    .upsert({
+      accounting_package_id: packageRow?.id || null,
+      company_id: companyId,
+      competence_month: `${competence}-01`,
+      item_key: item.key,
+      item_title: item.title,
+      required: item.required,
+      status: "uploaded",
+      original_file_name: status.fileName || null,
+      file_name: status.fileName || null,
+      storage_bucket: status.storageProvider || "google_drive",
+      storage_path: status.storagePath || status.driveFileId || "",
+      drive_file_id: status.driveFileId || "",
+      file_url: status.fileUrl || "",
+      file_size_bytes: status.fileSize || null,
+      mime_type: status.mimeType || "",
+      metadata: status.driveMetadata || {},
+      raw_metadata: {
+        source: "pacote_mensal",
+        company,
+        competence,
+        item_key: item.key,
+        item_title: item.title,
+        drive_path: status.drivePath,
+        drive_folder_id: status.driveFolderId || "",
+        upload_message: status.uploadMessage || "",
+      },
+      uploaded_by: state.authProfile?.id || null,
+      uploaded_at: status.at || new Date().toISOString(),
+    }, { onConflict: "company_id,competence_month,item_key" })
+    .select("id")
+    .single();
+  if (error) {
+    console.error("Erro ao persistir arquivo do pacote mensal", error);
+    return null;
+  }
+  return data?.id || null;
+}
+
 async function persistAccountingPackageSummary(company, competence, summary, status = "in_review") {
   if (!supabaseClient) return;
   const companyId = routineCompanyId(company);
@@ -5312,6 +5719,10 @@ async function persistAccountingPackageSummary(company, competence, summary, sta
       done: Boolean(item.status?.done),
       file_name: item.status?.fileName || "",
       drive_path: item.status?.drivePath || accountingDrivePath(company, competence),
+      accounting_file_id: item.status?.accountingFileId || "",
+      drive_file_id: item.status?.driveFileId || "",
+      file_url: item.status?.fileUrl || "",
+      storage_path: item.status?.storagePath || "",
       at: item.status?.at || "",
     },
   ]));
@@ -5334,22 +5745,47 @@ async function persistAccountingPackageSummary(company, competence, summary, sta
   if (error) console.error("Erro ao persistir resumo do pacote mensal", error);
 }
 
-function setAccountingPackageFile(company, competence, itemKey, file) {
+async function setAccountingPackageFile(company, competence, itemKey, file) {
   const item = accountingPackageItems().find((row) => row.key === itemKey);
   if (!item || !file) return;
+  const driveContext = accountingPackageDriveContext(company, competence, item);
+  let uploadResult = {
+    ok: true,
+    metadata: workspaceStorage?.buildMetadata ? workspaceStorage.buildMetadata(file, driveContext) : {},
+    message: "Arquivo registrado sem upload externo.",
+  };
+  if (workspaceStorage?.upload) {
+    uploadResult = await workspaceStorage.upload(file, driveContext);
+  }
+  if (!uploadResult.ok) {
+    state.accountingMessage = `${item.title} não foi anexado: ${uploadResult.message || "falha no envio ao Drive"}.`;
+    renderPage();
+    return;
+  }
+  const driveMetadata = uploadResult.metadata || {};
   const store = accountingPackageStore();
   const status = {
     done: true,
     fileName: file.name,
+    fileSize: file.size || null,
+    mimeType: file.type || "",
     at: new Date().toISOString(),
     by: currentUser.name,
     drivePath: accountingDrivePath(company, competence),
+    driveFolderId: driveMetadata.drive_folder_id || driveContext.driveFolderId || "",
+    driveFileId: driveMetadata.drive_file_id || "",
+    fileUrl: driveMetadata.drive_view_url || "",
+    storagePath: driveMetadata.drive_file_id || "",
+    storageProvider: driveMetadata.storage_provider || "google_drive",
+    driveMetadata,
+    uploadMessage: uploadResult.message || "",
   };
+  status.accountingFileId = await persistAccountingPackageFile(company, competence, item, status);
   store[accountingPackageKey(company, competence, item.key)] = status;
   saveAccountingPackageStore(store);
-  void persistAccountingPackageItem(company, competence, item, status);
-  void persistAccountingPackageSummary(company, competence, accountingPackageStatus(company, competence), "in_review");
-  state.accountingMessage = `${item.title} anexado para ${company} · ${routineCompetenceLabel(competence)}.`;
+  await persistAccountingPackageItem(company, competence, item, status);
+  await persistAccountingPackageSummary(company, competence, accountingPackageStatus(company, competence), "in_review");
+  state.accountingMessage = `${item.title} anexado para ${company} · ${routineCompetenceLabel(competence)}. ${uploadResult.message || ""}`;
 }
 
 async function sendAccountingPackage() {
@@ -5445,7 +5881,19 @@ function accountingPage() {
           ${summary.rows.map((item) => `<tr class="${item.status?.done ? "routine-row-done" : "routine-row-pending"}">
             <td><strong>${escapeHtml(item.title)}</strong><br><span>${item.required ? "Obrigatório" : "Opcional"}</span></td>
             <td>${statusPill(item.status?.done ? "Enviado" : item.required ? "Pendente" : "Opcional")}</td>
-            <td>${item.status?.fileName ? escapeHtml(item.status.fileName) : "Nenhum arquivo selecionado"}</td>
+            <td>${
+              item.status?.fileName
+                ? `<strong>${escapeHtml(item.status.fileName)}</strong><div class="inline-actions">${secureDocumentActions({
+                    secure_source_type: "accounting_file",
+                    secure_source_id: item.status.accountingFileId || "",
+                    drive_file_id: item.status.driveFileId || "",
+                    file_url: item.status.fileUrl || "",
+                    storage_path: item.status.storagePath || "",
+                    file_name: item.status.fileName || "",
+                    secure_has_file: Boolean(item.status.accountingFileId),
+                  })}</div>`
+                : "Nenhum arquivo selecionado"
+            }</td>
             <td>${item.status?.at ? formatDateTime(item.status.at) : "Sem atualização"}</td>
             <td>
               <label class="btn small ${item.status?.done ? "" : "primary"} accounting-upload-button file-upload-control">
@@ -6944,7 +7392,7 @@ async function persistPeopleControlDocument({ employee, module, values, file, en
   };
   const { data, error } = await supabaseClient.from("hr_employee_documents").insert(payload).select("id").single();
   if (error) throw new Error(`Documento não gravado: ${error.message}`);
-  return { table: "hr_employee_documents", id: data?.id || null };
+  return { table: "hr_employee_documents", id: data?.id || null, driveMetadata, payload };
 }
 
 async function persistPeopleControlEvent(module, employee, values, file, entry, summary) {
@@ -7025,6 +7473,33 @@ async function persistPeopleControlEvent(module, employee, values, file, entry, 
     }
 
     const documentRelated = await persistPeopleControlDocument({ employee, module, values, file, entry, summary });
+    if (documentRelated?.id && related?.id) {
+      const driveFileId = documentRelated.driveMetadata?.drive_file_id || "";
+      if (related.table === "hr_aso" || related.table === "hr_atestados") {
+        await supabaseClient
+          .from(related.table)
+          .update({
+            document_id: documentRelated.id,
+            drive_file_id: driveFileId,
+            link_documento: `secure-document:${documentRelated.id}`,
+          })
+          .eq("id", related.id);
+      } else if (related.table === "hr_epi") {
+        await supabaseClient
+          .from("hr_epi")
+          .update({
+            document_id: documentRelated.id,
+            drive_file_id: driveFileId,
+            link_imagem: `secure-document:${documentRelated.id}`,
+          })
+          .eq("id", related.id);
+      } else if (related.table === "hr_training_records") {
+        await supabaseClient
+          .from("hr_training_records")
+          .update({ certificate_document_id: documentRelated.id })
+          .eq("id", related.id);
+      }
+    }
     return { ok: true, related: related || documentRelated, documentRelated };
   } catch (error) {
     return { ok: false, message: error.message };
@@ -7816,10 +8291,22 @@ function employeePaystubRows(employee = currentUser) {
     record.status || "Disponível",
     record.file_name || "",
     record.file_url || "",
+    record.id || "",
+    record.drive_file_id || "",
+    record.storage_path || "",
   ]);
 }
 
-function paystubDownloadCell(file, url) {
+function paystubDownloadCell(file, url, documentId = "", driveFileId = "", storagePath = "") {
+  if (documentId && (driveFileId || url || storagePath)) {
+    return secureDocumentActions({
+      id: documentId,
+      file_name: file,
+      file_url: url,
+      drive_file_id: driveFileId,
+      storage_path: storagePath,
+    });
+  }
   if (!file || !url) return `<span class="muted">Ainda não liberado</span>`;
   return `<a class="btn small pdf-action" href="${encodeURI(url)}" target="_blank" rel="noopener">Abrir PDF</a>`;
 }
@@ -7847,13 +8334,13 @@ function paystubsPage() {
           <tbody>
             ${employeePaystubRows()
               .map(
-                ([, , period, type, company, status, file, url]) => `
+                ([, , period, type, company, status, file, url, documentId, driveFileId, storagePath]) => `
               <tr>
                 <td><strong>${period}</strong></td>
                 <td>${type}</td>
                 <td>${companyLogo(company)}</td>
                 <td>${statusPill(status)}</td>
-                <td>${paystubDownloadCell(file, url)}</td>
+                <td>${paystubDownloadCell(file, url, documentId, driveFileId, storagePath)}</td>
               </tr>`,
               )
               .join("") || `<tr><td colspan="5"><div class="empty">Nenhum contracheque real encontrado para este colaborador.</div></td></tr>`}
@@ -7899,7 +8386,7 @@ function paystubsPage() {
                 <td>${record.competence_label || record.competence}</td>
                 <td>${record.type || "Mensal"}</td>
                 <td>${statusPill(record.status || "Disponível")}</td>
-                <td>${paystubDownloadCell(record.file_name, record.file_url)}</td>
+                <td>${paystubDownloadCell(record.file_name, record.file_url, record.id, record.drive_file_id, record.storage_path)}</td>
               </tr>`,
               )
               .join("") || `<tr><td colspan="6"><div class="empty">Nenhum contracheque encontrado para esta pesquisa.</div></td></tr>`}
@@ -9914,6 +10401,7 @@ function handleDelegatedAppClick(event, appRoot) {
 
   const target = event.target.closest(
     [
+      "[data-secure-document]",
       "[data-dashboard-company]",
       "[data-requests-company]",
       "button[data-routine-company]",
@@ -10003,7 +10491,15 @@ function handleDelegatedAppClick(event, appRoot) {
   const { dataset } = target;
   let handled = true;
 
-  if (dataset.dashboardCompany !== undefined) {
+  if (dataset.secureDocument !== undefined || dataset.secureSourceId !== undefined) {
+    void openSecureDocument(
+      dataset.secureDocument || dataset.secureSourceId,
+      dataset.secureDocumentAction || "view",
+      target,
+      dataset.secureSourceType || "employee_document",
+      dataset.secureSourceId || dataset.secureDocument || "",
+    );
+  } else if (dataset.dashboardCompany !== undefined) {
     state.company = dataset.dashboardCompany || "Todas";
     renderPage();
   } else if (dataset.requestsCompany !== undefined) {
@@ -10324,6 +10820,7 @@ function handleDelegatedAppClick(event, appRoot) {
     if (dataset.action === "logout") {
       logout().then(renderPage);
     } else if (dataset.action === "refresh") {
+      clearRuntimeDataCache();
       loadSupabaseData();
     } else if (dataset.action === "new-request") {
       state.prefillRequestType = dataset.prefillType || "";
@@ -10558,10 +11055,10 @@ function bind() {
     });
   });
   document.querySelectorAll("[data-accounting-upload]").forEach((input) => {
-    input.addEventListener("change", () => {
+    input.addEventListener("change", async () => {
       const file = input.files?.[0];
       if (!file) return;
-      setAccountingPackageFile(
+      await setAccountingPackageFile(
         input.dataset.accountingCompany || accountingCompany(),
         input.dataset.accountingCompetenceValue || accountingCompetence(),
         input.dataset.accountingUpload,
@@ -11381,6 +11878,93 @@ async function saveEmployeeDetails(employeeId) {
   }
 }
 
+async function persistRequestAttachmentRecord({ requestId, selectedEmployee, company, requestTypeLabel, attachment, requestDraft, requestRawData }) {
+  const storage = requestDraft?.attachmentStorage || {};
+  const fileName = attachment?.name || storage.original_filename || requestRawData?.attachment_name || "";
+  const driveFileId = storage.drive_file_id || "";
+  const fileUrl = storage.drive_view_url || "";
+  if (!requestId || (!fileName && !driveFileId && !fileUrl)) return null;
+
+  const sensitivity = requestTypeLabel === "Atestado / afastamento" ? "hr_restricted" : "employee_private";
+  const storagePath = driveFileId || storage.storage_path || `requests/${requestId}/${safeDrivePathPart(fileName || "anexo")}`;
+  const metadata = {
+    source: "solicitacoes",
+    request_id: requestId,
+    request_type: requestTypeLabel,
+    employee_name: selectedEmployee?.name || currentUser.name,
+    company_name: company?.name || requestRawData?.company_name || "",
+    sensitivity,
+    ...storage,
+  };
+
+  try {
+    let documentId = null;
+    if (selectedEmployee?.dbId) {
+      const { data: documentData, error: documentError } = await supabaseClient
+        .from("hr_employee_documents")
+        .insert({
+          employee_id: selectedEmployee.dbId,
+          company_id: company?.id || null,
+          title: `${requestTypeLabel || "Solicitação"}: ${fileName || "Anexo"}`,
+          document_type: normalizeText(requestTypeLabel || "solicitacao").replace(/\s+/g, "_").toLowerCase(),
+          description: requestRawData?.workflow_status_label || "Anexo enviado em solicitação",
+          original_file_name: fileName || null,
+          file_name: fileName || null,
+          file_size_bytes: storage.file_size || attachment?.size || null,
+          mime_type: storage.mime_type || attachment?.type || "",
+          sensitivity,
+          storage_bucket: storage.storage_provider || "google_drive",
+          storage_path: storagePath,
+          drive_file_id: driveFileId,
+          file_url: fileUrl,
+          status: "active",
+          validation_status: "pending",
+          metadata,
+          raw_metadata: {
+            ...metadata,
+            drive_folder_id: storage.drive_folder_id || "",
+            drive_download_url: storage.drive_download_url || "",
+            sharing_mode: storage.sharing_mode || "private",
+          },
+          uploaded_by: state.authProfile?.id || null,
+        })
+        .select("id")
+        .single();
+      if (documentError) throw documentError;
+      documentId = documentData?.id || null;
+    }
+
+    const { data, error } = await supabaseClient
+      .from("hr_request_attachments")
+      .insert({
+        request_id: requestId,
+        document_id: documentId,
+        storage_bucket: storage.storage_provider || "google_drive",
+        storage_path: storagePath,
+        original_file_name: fileName || null,
+        uploaded_by: state.authProfile?.id || null,
+        drive_file_id: driveFileId,
+        file_url: fileUrl,
+        file_size_bytes: storage.file_size || attachment?.size || null,
+        mime_type: storage.mime_type || attachment?.type || "",
+        metadata,
+        raw_metadata: {
+          ...metadata,
+          drive_folder_id: storage.drive_folder_id || "",
+          drive_download_url: storage.drive_download_url || "",
+          sharing_mode: storage.sharing_mode || "private",
+        },
+      })
+      .select("id")
+      .single();
+    if (error) throw error;
+    return { id: data?.id || null, documentId };
+  } catch (error) {
+    console.warn("Anexo da solicitação não foi vinculado ao acesso seguro:", error.message);
+    return null;
+  }
+}
+
 async function tryPersistRequest(form, fallbackProtocol, requestDraft = null) {
   if (!supabaseClient) return { ok: false, message: "cliente Supabase indisponível" };
   try {
@@ -11390,6 +11974,35 @@ async function tryPersistRequest(form, fallbackProtocol, requestDraft = null) {
     const requestType = await getRequestTypeByLabel(String(form.get("type")));
     const protocol = `RH-${new Date().getFullYear()}-${String(Date.now()).slice(-6)}`;
     const company = await getOrCreateCompany(String(form.get("company") || selectedEmployee?.company || "Prodelar"));
+    const requestRawData = {
+      source: "app_form",
+      local_employee_id: selectedEmployee?.id || null,
+      fallback_protocol: fallbackProtocol,
+      owner: requestDraft?.owner || form.get("owner"),
+      workflow_owner: requestDraft?.owner || form.get("owner"),
+      workflow_next: requestDraft?.next || "Gerência",
+      workflow_status_label: requestDraft?.status || "Aberto",
+      workflow_log: [
+        {
+          from: "Criação",
+          to: requestDraft?.status || "Aberto",
+          by: currentUser.name,
+          at: new Date().toISOString(),
+          action: "Abrir solicitação",
+        },
+      ],
+      requester_name: currentUser.name,
+      requester_profile: currentUser.profile,
+      employee_name: selectedEmployee?.name || currentUser.name,
+      company_name: company.name,
+      attachment_name: attachment?.name || "",
+      attachment_storage_provider: requestDraft?.attachmentStorage?.storage_provider || "google_drive",
+      attachment_storage_mode: requestDraft?.attachmentStorage?.storage_mode || "test",
+      drive_file_id: requestDraft?.attachmentStorage?.drive_file_id || "",
+      drive_folder_id: requestDraft?.attachmentStorage?.drive_folder_id || "",
+      drive_view_url: requestDraft?.attachmentStorage?.drive_view_url || "",
+      sharing_mode: requestDraft?.attachmentStorage?.sharing_mode || "private",
+    };
     const { data, error } = await supabaseClient
       .from("hr_requests")
       .insert({
@@ -11400,39 +12013,34 @@ async function tryPersistRequest(form, fallbackProtocol, requestDraft = null) {
         status: requestDbStatus(requestDraft?.status || "Aberto"),
         title: String(form.get("title")),
         description: requestDraft?.description || String(form.get("description")),
-        raw_data: {
-          source: "app_form",
-          local_employee_id: selectedEmployee?.id || null,
-          fallback_protocol: fallbackProtocol,
-          owner: requestDraft?.owner || form.get("owner"),
-          workflow_owner: requestDraft?.owner || form.get("owner"),
-          workflow_next: requestDraft?.next || "Gerência",
-          workflow_status_label: requestDraft?.status || "Aberto",
-          workflow_log: [
-            {
-              from: "Criação",
-              to: requestDraft?.status || "Aberto",
-              by: currentUser.name,
-              at: new Date().toISOString(),
-              action: "Abrir solicitação",
-            },
-          ],
-          requester_name: currentUser.name,
-          requester_profile: currentUser.profile,
-          employee_name: selectedEmployee?.name || currentUser.name,
-          company_name: company.name,
-          attachment_name: attachment?.name || "",
-          attachment_storage_provider: requestDraft?.attachmentStorage?.storage_provider || "google_drive",
-          attachment_storage_mode: requestDraft?.attachmentStorage?.storage_mode || "test",
-          drive_file_id: requestDraft?.attachmentStorage?.drive_file_id || "",
-          drive_folder_id: requestDraft?.attachmentStorage?.drive_folder_id || "",
-          drive_view_url: requestDraft?.attachmentStorage?.drive_view_url || "",
-          sharing_mode: requestDraft?.attachmentStorage?.sharing_mode || "private",
-        },
+        raw_data: requestRawData,
       })
       .select("id,protocol_number")
       .single();
     if (error) return { ok: false, message: error.message };
+
+    const attachmentRecord = await persistRequestAttachmentRecord({
+      requestId: data.id,
+      selectedEmployee,
+      company,
+      requestTypeLabel: String(form.get("type") || ""),
+      attachment,
+      requestDraft,
+      requestRawData,
+    });
+    if (attachmentRecord?.id || attachmentRecord?.documentId) {
+      await supabaseClient
+        .from("hr_requests")
+        .update({
+          raw_data: {
+            ...requestRawData,
+            attachment_id: attachmentRecord.id || "",
+            attachment_document_id: attachmentRecord.documentId || "",
+            attachment_secure_source: attachmentRecord.documentId ? "employee_document" : "request_attachment",
+          },
+        })
+        .eq("id", data.id);
+    }
 
     await supabaseClient.from("hr_request_status_history").insert({
       request_id: data.id,

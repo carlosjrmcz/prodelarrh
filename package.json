@@ -21,5 +21,8 @@
     "pdf-lib": "^1.17.1",
     "pdfjs-dist": "^5.7.284",
     "vite": "^6.3.5"
+  },
+  "devDependencies": {
+    "terser": "^5.48.0"
   }
 }
