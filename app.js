@@ -15,7 +15,7 @@ const SUPABASE_URL = runtimeEnv.VITE_SUPABASE_URL || "";
 const SUPABASE_ANON_KEY = runtimeEnv.VITE_SUPABASE_ANON_KEY || runtimeEnv.VITE_SUPABASE_PUBLISHABLE_KEY || "";
 const supabaseUrl = SUPABASE_URL;
 const supabaseKey = SUPABASE_ANON_KEY;
-const APP_VERSION = "20260617-effective-templates-fix";
+const APP_VERSION = "20260617-employee-drive-org";
 const PUBLIC_APP_URL = "https://rhprodelar.netlify.app/";
 
 if (window.location.protocol === "file:") {
@@ -667,6 +667,7 @@ let registrationCards = [];
 let paystubRecords = [];
 let employeeDocumentRecords = [];
 let employeeTimelineEvents = [];
+let driveFolderRecords = [];
 let emailReviewEvents = [];
 let emailTemplateRows = [];
 let monthlyRoutineRows = [];
@@ -1025,6 +1026,7 @@ function applyRuntimeDataCache(cache) {
   paystubRecords = Array.isArray(cache.paystubRecords) ? cache.paystubRecords : [];
   employeeDocumentRecords = Array.isArray(cache.employeeDocumentRecords) ? cache.employeeDocumentRecords : [];
   employeeTimelineEvents = Array.isArray(cache.employeeTimelineEvents) ? cache.employeeTimelineEvents : [];
+  driveFolderRecords = Array.isArray(cache.driveFolderRecords) ? cache.driveFolderRecords : [];
   emailReviewEvents = Array.isArray(cache.emailReviewEvents)
     ? cache.emailReviewEvents.map((event) => ({ ...event, status: normalizeEmailQueueStatus(event.status) }))
     : [];
@@ -1058,6 +1060,7 @@ function saveRuntimeDataCache() {
         paystubRecords,
         employeeDocumentRecords,
         employeeTimelineEvents,
+        driveFolderRecords,
         emailReviewEvents,
         emailTemplateRows,
       }),
@@ -1081,6 +1084,7 @@ function clearSampleDataForSupabaseBoot() {
   paystubRecords = [];
   employeeDocumentRecords = [];
   employeeTimelineEvents = [];
+  driveFolderRecords = [];
   emailReviewEvents = [];
   emailTemplateRows = [];
   markRuntimeIndexesDirty();
@@ -1095,12 +1099,13 @@ function runtimeDataPayloadSignature(payload = {}) {
   const vacationRowsForSignature = payload.vacationForecasts || vacationForecasts;
   const paystubRows = payload.paystubRecords || paystubRecords;
   const timelineRows = payload.employeeTimelineEvents || employeeTimelineEvents;
+  const driveRows = payload.driveFolderRecords || driveFolderRecords;
   const emailReviewRows = payload.emailReviewEvents || emailReviewEvents;
   const templateRows = payload.emailTemplateRows || emailTemplateRows;
   const tailOf = (rows) => rows[rows.length - 1] || {};
   const firstEmailRow = emailReviewRows[0] || {};
   const firstTemplateRow = templateRows[0] || {};
-  const counts = [employeeRows.length, requestRows.length, documentRows.length, employeeDocumentRows.length, vacationRowsForSignature.length, paystubRows.length, timelineRows.length, emailReviewRows.length, templateRows.length];
+  const counts = [employeeRows.length, requestRows.length, documentRows.length, employeeDocumentRows.length, vacationRowsForSignature.length, paystubRows.length, timelineRows.length, driveRows.length, emailReviewRows.length, templateRows.length];
   const markers = [
     tailOf(employeeRows).id || "",
     requestRows[0]?.protocol || requestRows[0]?.id || "",
@@ -1108,6 +1113,7 @@ function runtimeDataPayloadSignature(payload = {}) {
     employeeDocumentRows[0]?.id || employeeDocumentRows[0]?.file_name || "",
     paystubRows[0]?.id || paystubRows[0]?.file_name || "",
     timelineRows[0]?.id || timelineRows[0]?.title || "",
+    driveRows[0]?.id || driveRows[0]?.drive_folder_id || "",
     [firstEmailRow.id, firstEmailRow.status, firstEmailRow.sent_at, firstEmailRow.last_error].filter(Boolean).join("|") || firstEmailRow.template_key || "",
     [firstTemplateRow.template_key, firstTemplateRow.subject_template, firstTemplateRow.is_active].filter(Boolean).join("|"),
   ];
@@ -1623,6 +1629,109 @@ function companyKeyFromId(companyId) {
 function supabaseStoragePublicUrl(bucket, path) {
   if (!bucket || !path || !supabaseClient) return "";
   return supabaseClient.storage.from(bucket).getPublicUrl(path).data?.publicUrl || "";
+}
+
+function driveWebUrlFromId(folderOrFileId) {
+  return folderOrFileId ? `https://drive.google.com/drive/folders/${folderOrFileId}` : "";
+}
+
+function driveFileWebUrl(fileId) {
+  return fileId ? `https://drive.google.com/file/d/${fileId}/view` : "";
+}
+
+function driveCompanyCode(company) {
+  const key = normalizeText(company);
+  if (key.includes("COLMOB")) return "COLMOB";
+  if (key.includes("SERVIMEC")) return "SERVIMEC";
+  return "PRODELAR";
+}
+
+function driveFolderUrl(record) {
+  return record?.drive_folder_url || driveWebUrlFromId(record?.drive_folder_id || "");
+}
+
+function driveRootFolder() {
+  return driveFolderRecords.find((folder) => folder.folder_type === "root") || {
+    folder_name: "RH Prodelar",
+    drive_folder_id: googleWorkspaceConfig.rootFolderId || "",
+    drive_folder_url: driveWebUrlFromId(googleWorkspaceConfig.rootFolderId || ""),
+  };
+}
+
+function driveCompanyRootFolder(company) {
+  const companyCode = driveCompanyCode(company);
+  const companyId = routineCompanyId(companyCode);
+  return (
+    driveFolderRecords.find((folder) => folder.folder_type === "company_root" && folder.company_id === companyId) ||
+    driveFolderRecords.find((folder) => folder.folder_type === "company_root" && normalizeText(folder.folder_name).includes(companyCode)) ||
+    null
+  );
+}
+
+function driveModuleForDocumentType(value = "") {
+  const label = normalizeText(value);
+  if (label.includes("CONTRACHEQUE") || label.includes("PAGAMENTO") || label.includes("FOLHA") || label.includes("HOLERITE")) return "04_FOLHA_E_CONTRACHEQUES";
+  if (label.includes("PONTO") || label.includes("BANCO DE HORAS") || label.includes("HORA EXTRA") || label.includes("JORNADA")) return "05_PONTO_E_BANCO_DE_HORAS";
+  if (label.includes("FERIA")) return "06_FERIAS";
+  if (label.includes("ATESTADO") || label.includes("AFASTAMENTO") || label.includes("ASO") || label.includes("SAUDE") || label.includes("OCUPACIONAL")) return "07_ATESTADOS_E_AFASTAMENTOS";
+  if (label.includes("BENEF")) return "08_BENEFICIOS";
+  if (label.includes("DESLIG") || label.includes("RESCIS")) return "09_DESLIGAMENTO";
+  if (label.includes("ADMISS") || label.includes("CANDIDATO")) return "02_ADMISSAO";
+  if (label.includes("CONTRATO") || label.includes("TERMO") || label.includes("EPI") || label.includes("EQUIP") || label.includes("EXPERIENCIA")) return "03_CONTRATOS_E_TERMOS";
+  if (label.includes("TREIN") || label.includes("POLITICA") || label.includes("MANUAL")) return "10_POLITICAS";
+  if (label.includes("DOCUMENTO") || label.includes("CPF") || label.includes("RG") || label.includes("CTPS") || label.includes("PIS") || label.includes("CNH") || label.includes("ENDERECO") || label.includes("CERTID")) return "01_COLABORADORES";
+  return "00_ENTRADA";
+}
+
+function driveModuleFolder(company, moduleKey) {
+  const companyCode = driveCompanyCode(company);
+  const companyId = routineCompanyId(companyCode);
+  const folderType = `module_${String(moduleKey || "").toLowerCase()}`;
+  return (
+    driveFolderRecords.find((folder) => folder.folder_type === folderType && folder.company_id === companyId) ||
+    driveFolderRecords.find((folder) => folder.folder_type === folderType && normalizeText(folder.folder_name).startsWith(`${companyCode}/`)) ||
+    driveCompanyRootFolder(company) ||
+    driveRootFolder()
+  );
+}
+
+function driveDestinationForEmployee(employee, documentType = "Documento") {
+  const moduleKey = driveModuleForDocumentType(documentType);
+  const moduleFolder = driveModuleFolder(employee?.company || currentUser.company || "Prodelar", moduleKey);
+  const employeeName = safeDrivePathPart(employee?.name || "Colaborador");
+  return {
+    moduleKey,
+    folder: moduleFolder,
+    folderId: moduleFolder?.drive_folder_id || googleWorkspaceConfig.rootFolderId || "",
+    folderUrl: driveFolderUrl(moduleFolder) || driveWebUrlFromId(googleWorkspaceConfig.rootFolderId || ""),
+    employeePath: `${driveCompanyCode(employee?.company || "Prodelar")}/${moduleKey}/${employeeName}`,
+  };
+}
+
+function safeDrivePathPart(value) {
+  return String(value || "")
+    .replace(/[\\/:*?"<>|]+/g, "-")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function driveFolderAnchor(recordOrUrl, label = "Abrir pasta") {
+  const url = typeof recordOrUrl === "string" ? recordOrUrl : driveFolderUrl(recordOrUrl);
+  if (!url) return `<span class="muted">Pasta não indexada</span>`;
+  return `<a class="btn small" href="${escapeHtml(url)}" target="_blank" rel="noreferrer">${escapeHtml(label)}</a>`;
+}
+
+function driveContextForDocument(employee, documentType, sensitivity = "employee_private") {
+  const destination = driveDestinationForEmployee(employee, documentType);
+  return {
+    employeeId: employee?.dbId || employee?.id || "",
+    employeeName: employee?.name || "",
+    company: employee?.company || currentUser.company || "Prodelar",
+    documentType,
+    sensitivity,
+    sharingMode: sensitivity === "hr_restricted" ? "restricted" : "private",
+    driveFolderId: destination.folderId,
+  };
 }
 
 function isSamePerson(a, b) {
@@ -2328,6 +2437,7 @@ async function loadSupabaseDataFresh() {
     paystubRecords = [];
     employeeDocumentRecords = [];
     employeeTimelineEvents = [];
+    driveFolderRecords = [];
     emailReviewEvents = [];
     emailTemplateRows = [];
     monthlyRoutineRows = [];
@@ -2342,7 +2452,7 @@ async function loadSupabaseDataFresh() {
   try {
     const previousSignature = runtimeDataSignature;
     const wasAlreadyConnected = state.dataStatus.startsWith("Supabase conectado");
-    const [employeeResult, employeeEmailResult, profileResult, requestResult, vacationResult, documentResult, employeeDocumentResult, timelineResult, emailReviewResult, emailTemplateResult, routineResult, accountingResult, announcementResult] = await Promise.all([
+    const [employeeResult, employeeEmailResult, profileResult, requestResult, vacationResult, documentResult, employeeDocumentResult, timelineResult, emailReviewResult, emailTemplateResult, routineResult, accountingResult, announcementResult, driveFolderResult] = await Promise.all([
       supabaseClient.from("hr_employee_directory").select("*").order("full_name"),
       supabaseClient.from("hr_employees").select("id,email"),
       supabaseClient.from("hr_profiles").select("employee_id,role_code,is_active"),
@@ -2360,7 +2470,7 @@ async function loadSupabaseDataFresh() {
       supabaseClient
         .from("hr_employee_documents")
         .select(
-          "id,title,description,original_file_name,file_name,file_url,drive_file_id,storage_bucket,storage_path,competence_month,sensitivity,status,validation_status,metadata,raw_metadata,created_at,employee_id,employee:hr_employees(employee_code,full_name,company:hr_companies(code,name),department:hr_departments(name),position:hr_positions(name)),document_type:hr_document_types(code,name,category)",
+          "id,title,description,original_file_name,file_name,file_url,drive_file_id,file_size_bytes,mime_type,storage_bucket,storage_path,competence_month,sensitivity,status,validation_status,metadata,raw_metadata,created_at,employee_id,employee:hr_employees(employee_code,full_name,company:hr_companies(code,name),department:hr_departments(name),position:hr_positions(name)),document_type:hr_document_types(code,name,category)",
         )
         .order("competence_month", { ascending: false }),
       supabaseClient
@@ -2393,6 +2503,10 @@ async function loadSupabaseDataFresh() {
         .select("id,company_id,department_id,target_employee_id,template_key,delivery_channel,title,body,payload,status,published_at,expires_at,created_by,created_at,updated_at")
         .order("created_at", { ascending: false })
         .limit(300),
+      supabaseClient
+        .from("hr_drive_folders")
+        .select("id,folder_type,folder_name,drive_folder_id,drive_folder_url,parent_folder_id,employee_id,company_id,competence_month,created_at")
+        .order("folder_name"),
     ]);
 
     const errors = [employeeResult.error, requestResult.error, vacationResult.error, documentResult.error, employeeDocumentResult.error, timelineResult.error, emailReviewResult.error, emailTemplateResult.error, routineResult.error, accountingResult.error, announcementResult.error].filter(Boolean);
@@ -2406,6 +2520,7 @@ async function loadSupabaseDataFresh() {
       paystubRecords = [];
       employeeDocumentRecords = [];
       employeeTimelineEvents = [];
+      driveFolderRecords = [];
       emailReviewEvents = [];
       emailTemplateRows = [];
       monthlyRoutineRows = [];
@@ -2419,6 +2534,7 @@ async function loadSupabaseDataFresh() {
 
     if (profileResult.error) console.warn("Perfis não carregados para hierarquia visual:", profileResult.error.message);
     if (employeeEmailResult.error) console.warn("E-mails de colaboradores não carregados:", employeeEmailResult.error.message);
+    if (driveFolderResult.error) console.warn("Índice do Google Drive não carregado:", driveFolderResult.error.message);
     const profileByEmployeeId = new Map((profileResult.data || []).map((profile) => [profile.employee_id, profile]));
     const emailByEmployeeId = new Map((employeeEmailResult.data || []).map((employee) => [employee.id, employee.email || ""]));
     employees = (employeeResult.data || []).map((row) => {
@@ -2504,11 +2620,15 @@ async function loadSupabaseDataFresh() {
       status: row.status || row.validation_status || (row.storage_path || row.file_url ? "Disponível" : "Registrado"),
       validation_status: row.validation_status || "",
       file_name: row.file_name || row.original_file_name || "",
-      file_url: row.file_url || (row.storage_path ? supabaseStoragePublicUrl(row.storage_bucket, row.storage_path) : ""),
+      file_url: row.file_url || row.metadata?.drive_view_url || row.raw_metadata?.drive_view_url || (row.storage_path ? supabaseStoragePublicUrl(row.storage_bucket, row.storage_path) : ""),
       storage_bucket: row.storage_bucket || "",
       storage_path: row.storage_path || "",
       drive_file_id: row.drive_file_id || "",
-      metadata: row.metadata || row.raw_metadata || {},
+      drive_folder_id: row.raw_metadata?.drive_folder_id || row.metadata?.drive_folder_id || "",
+      drive_folder_url: row.raw_metadata?.drive_folder_url || row.metadata?.drive_folder_url || "",
+      file_size_bytes: row.file_size_bytes || row.metadata?.file_size || row.raw_metadata?.file_size || "",
+      mime_type: row.mime_type || row.metadata?.mime_type || row.raw_metadata?.mime_type || "",
+      metadata: { ...(row.raw_metadata || {}), ...(row.metadata || {}) },
       created_at: row.created_at || "",
     }));
     paystubRecords = employeeDocumentRecords
@@ -2539,6 +2659,19 @@ async function loadSupabaseDataFresh() {
       created_at: row.created_at,
       related_table: row.related_table || "",
       related_record_id: row.related_record_id || "",
+    }));
+    driveFolderRecords = (driveFolderResult.data || []).map((row) => ({
+      id: row.id || "",
+      folder_type: row.folder_type || "",
+      folder_name: row.folder_name || "",
+      drive_folder_id: row.drive_folder_id || "",
+      drive_folder_url: row.drive_folder_url || "",
+      parent_folder_id: row.parent_folder_id || "",
+      employee_id: row.employee_id || "",
+      company_id: row.company_id || "",
+      company: companyKeyFromId(row.company_id),
+      competence_month: row.competence_month || "",
+      created_at: row.created_at || "",
     }));
     emailReviewEvents = (emailReviewResult.data || []).map((row) => ({
       id: row.id,
@@ -2648,6 +2781,7 @@ async function loadSupabaseDataFresh() {
     paystubRecords = [];
     employeeDocumentRecords = [];
     employeeTimelineEvents = [];
+    driveFolderRecords = [];
     emailReviewEvents = [];
     emailTemplateRows = [];
     monthlyRoutineRows = [];
@@ -3043,6 +3177,7 @@ function employeeDetailPage() {
     ["ferias", "Férias"],
     ["ponto", "Ponto"],
     ["pacote", "Pacote mensal"],
+    ["drive", "Drive"],
   ];
 
   return `
@@ -3058,9 +3193,9 @@ function employeeDetailPage() {
           <div class="field"><label>Empresa</label><strong>${employee.company}</strong></div>
           <div class="field"><label>Cargo</label><strong>${employee.role}</strong></div>
           <div class="field"><label>Líder</label><strong>${employee.manager}</strong></div>
+          <div class="field"><label>E-mail</label><strong>${employee.email || "sem e-mail"}</strong></div>
           <div class="field"><label>Admissão</label><strong>${employee.admission}</strong></div>
-          <div class="field"><label>Férias</label><strong>${employee.vacation}</strong></div>
-          <div class="field"><label>Banco de horas</label><strong>${employee.timeBank}</strong></div>
+          <div class="field"><label>Perfil</label><strong>${employee.roleCode || employee.leadershipLevel || "employee"}</strong></div>
         </div>
       </div>
     </div>
@@ -3086,12 +3221,67 @@ function employeeDetailTab(employee) {
     ferias: () => employeeVacation(employee),
     ponto: () => employeeTime(employee),
     pacote: () => employeeAccounting(employee),
+    drive: () => employeeDrive(employee),
   };
   return (renderers[state.detailTab] || renderers.ficha)();
 }
 
+function findEmployeeRecord(value) {
+  const key = normalizeText(value);
+  return employees.find((employee) => employee.dbId === value || employee.id === value || normalizeText(employee.name) === key) || null;
+}
+
+function employeeImmediateLeader(employee) {
+  if (!employee) return null;
+  if (employee.managerEmployeeId) return findEmployeeRecord(employee.managerEmployeeId);
+  return findEmployeeRecord(employee.manager);
+}
+
+function employeeLeadershipChain(employee, limit = 6) {
+  const chain = [];
+  const visited = new Set();
+  let current = employeeImmediateLeader(employee);
+  while (current && chain.length < limit) {
+    const key = current.dbId || current.id || current.name;
+    if (visited.has(key)) break;
+    visited.add(key);
+    chain.push(current);
+    current = employeeImmediateLeader(current);
+  }
+  return chain;
+}
+
+function employeeDriveSummary(employee) {
+  const destination = driveDestinationForEmployee(employee, "Documento pessoal");
+  const companyRoot = driveCompanyRootFolder(employee.company);
+  const root = driveRootFolder();
+  const existingEmployeeFolderUrl = employeeDocumentRows(employee).find((doc) => doc.drive_folder_url || doc.drive_folder_id);
+  const employeeFolderUrl =
+    existingEmployeeFolderUrl?.drive_folder_url || (existingEmployeeFolderUrl?.drive_folder_id ? driveWebUrlFromId(existingEmployeeFolderUrl.drive_folder_id) : "");
+  const folderLabel = destination.employeePath;
+  return `
+    <div class="drive-summary">
+      <div>
+        <span>Raiz</span>
+        <strong>RH Prodelar</strong>
+        ${driveFolderAnchor(root, "Abrir raiz")}
+      </div>
+      <div>
+        <span>Empresa</span>
+        <strong>${escapeHtml(driveCompanyCode(employee.company))}</strong>
+        ${driveFolderAnchor(companyRoot, "Abrir empresa")}
+      </div>
+      <div>
+        <span>Destino padrão por colaborador</span>
+        <strong>${escapeHtml(folderLabel)}</strong>
+        ${driveFolderAnchor(employeeFolderUrl || destination.folderUrl, employeeFolderUrl ? "Abrir pasta do colaborador" : "Abrir módulo")}
+      </div>
+    </div>`;
+}
+
 function employeeFicha(employee) {
   const card = employee.registrationCard || registrationCards.find((item) => item.employee_code === employee.id);
+  const chain = employeeLeadershipChain(employee);
   const cardFields = card
     ? `
           <div class="field"><label>CPF</label><strong>${card.cpf || "Não lido"}</strong></div>
@@ -3109,7 +3299,14 @@ function employeeFicha(employee) {
           <div class="field"><label>Código</label><strong>${employee.id}</strong></div>
           <div class="field"><label>Nome</label><strong>${employee.name}</strong></div>
           <div class="field"><label>Status</label><strong>${employee.status}</strong></div>
+          <div class="field"><label>E-mail</label><strong>${employee.email || "sem e-mail cadastrado"}</strong></div>
+          <div class="field"><label>CPF</label><strong>${employee.cpf || "Não informado"}</strong></div>
+          <div class="field"><label>Nascimento</label><strong>${employee.birthDate ? formatDate(employee.birthDate) : "Não informado"}</strong></div>
+          <div class="field"><label>Empresa</label><strong>${employee.company}</strong></div>
           <div class="field"><label>Setor</label><strong>${employee.department}</strong></div>
+          <div class="field"><label>Cargo</label><strong>${employee.role}</strong></div>
+          <div class="field"><label>Líder imediato</label><strong>${employee.manager}</strong></div>
+          <div class="field"><label>Cadeia</label><strong>${chain.map((leader) => leader.name).join(" → ") || "Sem liderança acima"}</strong></div>
           <div class="field"><label>Jornada</label><strong>44h semanais</strong></div>
           <div class="field"><label>Contrato</label><strong>CLT</strong></div>
           ${cardFields}
@@ -3117,6 +3314,10 @@ function employeeFicha(employee) {
       </div>
       <div class="card pad">
         <div class="notice"><strong>Regra de privacidade aplicada</strong><p>Esta visão de líder não mostra salário, contracheque, rescisão, ASO, advertência ou documentos pessoais. Esses dados ficam restritos ao RH/diretoria.</p></div>
+        <div class="employee-drive-card">
+          <div class="section-title"><div><h3>Google Drive vinculado</h3><p>Os anexos da ficha e dos controles usam a pasta da empresa e do módulo correspondente.</p></div>${statusPill(driveFolderRecords.length ? "Indexado" : "Sem índice")}</div>
+          ${employeeDriveSummary(employee)}
+        </div>
       </div>
     </div>`;
 }
@@ -3129,9 +3330,11 @@ function employeeDocumentRows(employee) {
 
 function employeeDocuments(employee) {
   const rows = employeeDocumentRows(employee);
+  const defaultDestination = driveDestinationForEmployee(employee, "Documento pessoal");
   return `
     <div class="card pad">
       <div class="section-title"><div><h2>Documentos do colaborador</h2><p>Arquivos vinculados ao cadastro, controles do RH e rotinas mensais</p></div>${statusPill(rows.length)}</div>
+      <div class="notice slim-notice"><strong>Destino Drive</strong><p>${escapeHtml(defaultDestination.employeePath)}. Ao anexar, o arquivo é enviado para o Google Drive e o Supabase guarda o ID/link do arquivo.</p></div>
       <form id="employee-document-form" class="employee-document-form" data-employee-document-form="${escapeHtml(employee.dbId || employee.id)}">
         <label class="form-field"><span>Tipo</span><input name="title" placeholder="Ex.: ASO, contrato, documento pessoal" required /></label>
         <label class="form-field"><span>Descrição</span><input name="description" placeholder="Observação opcional" /></label>
@@ -3143,7 +3346,18 @@ function employeeDocuments(employee) {
           rows.length
             ? rows
                 .map(
-                  (doc) => `<div class="doc"><div><strong>${escapeHtml(doc.title || doc.type)}</strong><span>${escapeHtml([doc.file_name, doc.description, doc.created_at ? formatDateTime(doc.created_at) : ""].filter(Boolean).join(" · "))}</span></div>${statusPill(doc.status || doc.validation_status || "Registrado")}</div>`,
+                  (doc) => {
+                    const fileUrl = doc.file_url || driveFileWebUrl(doc.drive_file_id);
+                    const folderUrl = doc.drive_folder_url || (doc.drive_folder_id ? driveWebUrlFromId(doc.drive_folder_id) : driveDestinationForEmployee(employee, doc.type || doc.title).folderUrl);
+                    return `<div class="doc employee-doc-row">
+                      <div><strong>${escapeHtml(doc.title || doc.type)}</strong><span>${escapeHtml([doc.file_name, doc.description, doc.created_at ? formatDateTime(doc.created_at) : ""].filter(Boolean).join(" · "))}</span></div>
+                      <div class="doc-actions">
+                        ${fileUrl ? `<a class="btn small" href="${escapeHtml(fileUrl)}" target="_blank" rel="noreferrer">Abrir arquivo</a>` : ""}
+                        ${folderUrl ? `<a class="btn small" href="${escapeHtml(folderUrl)}" target="_blank" rel="noreferrer">Pasta Drive</a>` : ""}
+                        ${statusPill(doc.status || doc.validation_status || "Registrado")}
+                      </div>
+                    </div>`;
+                  },
                 )
                 .join("")
             : `<div class="empty">Nenhum documento vinculado ainda. Anexe acima ou lance pelo Controles RH.</div>`
@@ -3154,30 +3368,81 @@ function employeeDocuments(employee) {
 
 function employeeControls(employee) {
   const controlRows = [
+    ["admissionProcess", "Processo admissional", "Consultar pré-admissão, link e conversão"],
     ["aso", "ASO", "Registrar/renovar exame ocupacional"],
     ["medical", "Atestado", "Lançar atestado ou afastamento"],
     ["training", "Treinamento", "Registrar certificado, reciclagem ou pendência"],
     ["equipment", "EPI / Equipamento", "Registrar entrega, troca ou devolução"],
     ["experience", "Contrato de experiência", "Controlar 45/90 dias e parecer"],
     ["benefits", "Benefícios", "Registrar adesão, alteração ou cancelamento"],
-    ["communications", "Comunicados", "Enviar comunicado individual ou registrar ciência"],
-    ["timeline", "Linha do tempo", "Consultar histórico consolidado"],
+    ["other", "Outros controles", "Registrar evento livre vinculado à ficha"],
   ];
   return `
     <div class="card pad">
       <div class="section-title"><div><h2>Controles RH do colaborador</h2><p>Abra o módulo já filtrado para ${escapeHtml(employee.name)}.</p></div>${statusPill("Operacional")}</div>
       <div class="employee-control-grid">
         ${controlRows
-          .map(
-            ([moduleKey, title, detail]) => `<button type="button" class="status-card employee-control-action" data-detail-control-module="${moduleKey}" data-detail-control-employee="${escapeHtml(employee.dbId || employee.id)}">
-              <strong>${escapeHtml(title)}</strong><span>${escapeHtml(detail)}</span><em>Abrir</em>
-            </button>`,
-          )
+          .map(([moduleKey, title, detail]) => {
+            const destination = driveDestinationForEmployee(employee, title);
+            return `<button type="button" class="status-card employee-control-action" data-detail-control-module="${moduleKey}" data-detail-control-employee="${escapeHtml(employee.dbId || employee.id)}">
+              <strong>${escapeHtml(title)}</strong><span>${escapeHtml(detail)}</span><small>${escapeHtml(destination.folder?.folder_name || destination.employeePath)}</small><em>Abrir</em>
+            </button>`;
+          })
           .join("")}
       </div>
     </div>
     ${employeeHistory(employee)}
   `;
+}
+
+function employeeDrive(employee) {
+  const modules = [
+    ["01_COLABORADORES", "Documentos pessoais", "Ficha, documentos e cadastro"],
+    ["02_ADMISSAO", "Admissão", "Processo admissional e documentos do candidato"],
+    ["03_CONTRATOS_E_TERMOS", "Contratos, termos e EPI", "Contrato de experiência, termos e equipamentos"],
+    ["04_FOLHA_E_CONTRACHEQUES", "Folha e contracheques", "Contracheques e referências mensais"],
+    ["05_PONTO_E_BANCO_DE_HORAS", "Ponto e banco de horas", "Ajustes, fechamento e comprovantes"],
+    ["06_FERIAS", "Férias", "Programação, aprovação e documentos de férias"],
+    ["07_ATESTADOS_E_AFASTAMENTOS", "ASO, atestados e afastamentos", "Saúde ocupacional e afastamentos"],
+    ["08_BENEFICIOS", "Benefícios", "Adesões, alterações e comprovantes"],
+    ["09_DESLIGAMENTO", "Desligamento", "Rescisão e encerramento"],
+    ["10_POLITICAS", "Políticas e treinamentos", "Políticas, certificados e reciclagens"],
+  ];
+  const docs = employeeDocumentRows(employee);
+  return `
+    <div class="grid two">
+      <div class="card pad">
+        <div class="section-title"><div><h2>Estrutura Google Drive</h2><p>Pastas de destino para ${escapeHtml(employee.name)}.</p></div>${statusPill(`${driveFolderRecords.length} pastas`)}</div>
+        ${employeeDriveSummary(employee)}
+        <div class="drive-module-list">
+          ${modules
+            .map(([moduleKey, title, detail]) => {
+              const folder = driveModuleFolder(employee.company, moduleKey);
+              return `<div class="drive-module-row">
+                <div><strong>${escapeHtml(title)}</strong><span>${escapeHtml(detail)}</span><small>${escapeHtml(driveCompanyCode(employee.company))}/${escapeHtml(moduleKey)}/${escapeHtml(safeDrivePathPart(employee.name))}</small></div>
+                ${driveFolderAnchor(folder, "Abrir")}
+              </div>`;
+            })
+            .join("")}
+        </div>
+      </div>
+      <div class="card pad">
+        <div class="section-title"><div><h2>Arquivos vinculados</h2><p>Consulta rápida dos arquivos já associados à ficha.</p></div>${statusPill(docs.length)}</div>
+        <div class="doc-list">
+          ${
+            docs.length
+              ? docs.map((doc) => `<div class="doc employee-doc-row">
+                  <div><strong>${escapeHtml(doc.title)}</strong><span>${escapeHtml([doc.file_name, doc.type, doc.created_at ? formatDateTime(doc.created_at) : ""].filter(Boolean).join(" · "))}</span></div>
+                  <div class="doc-actions">
+                    ${(doc.file_url || doc.drive_file_id) ? `<a class="btn small" href="${escapeHtml(doc.file_url || driveFileWebUrl(doc.drive_file_id))}" target="_blank" rel="noreferrer">Abrir arquivo</a>` : ""}
+                    ${driveFolderAnchor(doc.drive_folder_url || driveDestinationForEmployee(employee, doc.type || doc.title).folderUrl, "Pasta")}
+                  </div>
+                </div>`).join("")
+              : `<div class="empty">Nenhum arquivo vinculado ainda.</div>`
+          }
+        </div>
+      </div>
+    </div>`;
 }
 
 async function saveEmployeeDocumentFromForm(form) {
@@ -3198,7 +3463,21 @@ async function saveEmployeeDocumentFromForm(form) {
     renderPage();
     return;
   }
-  const storagePath = `ficha-colaborador/${employee.dbId}/${Date.now()}-${fileName}`.replace(/\s+/g, "_");
+  const destination = driveDestinationForEmployee(employee, title);
+  let uploadResult = {
+    ok: true,
+    metadata: workspaceStorage?.buildMetadata ? workspaceStorage.buildMetadata(file, driveContextForDocument(employee, title, "employee_private")) : {},
+    message: "Arquivo registrado sem upload externo.",
+  };
+  if (workspaceStorage?.upload) {
+    uploadResult = await workspaceStorage.upload(file, driveContextForDocument(employee, title, "employee_private"));
+  }
+  if (!uploadResult.ok) {
+    state.formMessage = `Documento não anexado: ${uploadResult.message}`;
+    renderPage();
+    return;
+  }
+  const driveMetadata = uploadResult.metadata || {};
   const { data: inserted, error } = await supabaseClient
     .from("hr_employee_documents")
     .insert({
@@ -3210,12 +3489,26 @@ async function saveEmployeeDocumentFromForm(form) {
       file_size_bytes: file.size || null,
       mime_type: file.type || null,
       sensitivity: "employee_private",
-      storage_bucket: "hr-employee-documents",
-      storage_path: storagePath,
+      storage_bucket: driveMetadata.storage_provider || "google_drive",
+      storage_path: driveMetadata.drive_file_id || "",
+      drive_file_id: driveMetadata.drive_file_id || "",
+      file_url: driveMetadata.drive_view_url || "",
       status: "active",
       validation_status: "pending",
-      raw_metadata: { source: "ficha_colaborador", file_name: fileName },
-      metadata: { source: "ficha_colaborador", actor_name: currentUser.name },
+      raw_metadata: {
+        source: "ficha_colaborador",
+        file_name: fileName,
+        drive_folder_id: driveMetadata.drive_folder_id || destination.folderId || "",
+        drive_folder_url: driveWebUrlFromId(driveMetadata.drive_folder_id || destination.folderId || ""),
+        drive_destination_path: destination.employeePath,
+        upload_message: uploadResult.message || "",
+      },
+      metadata: {
+        source: "ficha_colaborador",
+        actor_name: currentUser.name,
+        ...driveMetadata,
+        drive_destination_path: destination.employeePath,
+      },
       uploaded_by: state.authProfile?.id || null,
     })
     .select("id")
@@ -3234,9 +3527,9 @@ async function saveEmployeeDocumentFromForm(form) {
     status: "adicionado",
     relatedTable: "hr_employee_documents",
     relatedRecordId: inserted?.id || null,
-    metadata: { file_name: fileName, description },
+    metadata: { file_name: fileName, description, drive_file_id: driveMetadata.drive_file_id || "", drive_folder_id: driveMetadata.drive_folder_id || destination.folderId || "" },
   });
-  state.formMessage = `Documento anexado para ${employee.name}.`;
+  state.formMessage = `Documento anexado para ${employee.name}. ${uploadResult.message || "Arquivo enviado ao Drive."}`;
   await loadSupabaseData();
   renderPage();
 }
@@ -6430,26 +6723,68 @@ function hierarchyPage() {
 }
 
 function visualOrgChart(leaders, withoutLeader) {
-  const activeLeaders = leaders.filter((leader) => leader.directReports.length).slice(0, 18);
-  const currentUserKey = normalizeText(currentUser.name);
-  return `<div class="card pad org-chart-card" style="margin-top:16px">
-    <div class="section-title"><div><h2>Organograma visual</h2><p>Estrutura por gestor imediato, construída a partir do vínculo de liderança cadastrado.</p></div>${statusPill(`${activeLeaders.length} nós`)}</div>
-    <div class="org-chart">
-      <div class="org-root"><strong>Diretoria</strong><span>Grupo Prodelar</span></div>
-      <div class="org-branches">
+  const activeLeaders = leaders.filter((leader) => leader.directReports.length);
+  const currentUserKey = normalizeText(currentUser?.name || "");
+  const initials = (name) =>
+    String(name || "RH")
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((part) => part[0])
+      .join("")
+      .toUpperCase();
+  const visibleLeaders = activeLeaders.slice(0, 12);
+  const totalReports = activeLeaders.reduce((sum, leader) => sum + leader.directReports.length, 0);
+  return `<div class="card pad org-chart-card">
+    <div class="section-title"><div><h2>Organograma visual</h2><p>Diretoria, lideranças e equipes diretas a partir dos vínculos cadastrados.</p></div>${statusPill(`${activeLeaders.length} líderes`)}</div>
+    <div class="org-visual">
+      <div class="org-hero">
+        <div class="org-root-card">
+          <div class="org-avatar">RH</div>
+          <div>
+            <strong>Diretoria Grupo Prodelar</strong>
+            <span>Visão consolidada das lideranças</span>
+          </div>
+        </div>
+        <div class="org-metrics">
+          <div><strong>${activeLeaders.length}</strong><span>lideranças</span></div>
+          <div><strong>${totalReports}</strong><span>vínculos diretos</span></div>
+          <div><strong>${withoutLeader.length}</strong><span>sem líder</span></div>
+        </div>
+      </div>
+      <div class="org-tree-grid">
         ${
-          activeLeaders.length
-            ? activeLeaders.map((leader) => `<div class="org-node ${normalizeText(leader.name) === currentUserKey ? "current-user" : ""}">
-                <button class="org-leader" data-employee="${leader.dbId || leader.id}"><strong>${escapeHtml(leader.name)}</strong><span>${escapeHtml(leader.role)} · ${escapeHtml(leader.company)}</span></button>
-                <div class="org-team">
-                  ${leader.directReports.slice(0, 10).map((employee) => `<button class="${normalizeText(employee.name) === currentUserKey ? "current-user" : ""}" data-employee="${employee.dbId || employee.id}">${escapeHtml(employee.name)}<small>${escapeHtml(employee.department || "Sem setor")}</small></button>`).join("")}
-                  ${leader.directReports.length > 10 ? `<span>+${leader.directReports.length - 10} colaboradores<small>Equipe direta</small></span>` : ""}
-                </div>
-              </div>`).join("")
+          visibleLeaders.length
+            ? visibleLeaders
+                .map((leader) => {
+                  const isCurrentLeader = normalizeText(leader.name) === currentUserKey;
+                  const reports = leader.directReports.slice(0, 5);
+                  return `<div class="org-leader-card ${isCurrentLeader ? "current-user" : ""}">
+                    <button class="org-person org-person-leader" data-employee="${leader.dbId || leader.id}">
+                      <span class="org-mini-avatar">${escapeHtml(initials(leader.name))}</span>
+                      <span><strong>${escapeHtml(leader.name)}</strong><small>${escapeHtml(leader.role)} · ${escapeHtml(leader.company)}</small></span>
+                    </button>
+                    <div class="org-team-grid">
+                      ${
+                        reports.length
+                          ? reports
+                              .map((employee) => `<button class="org-person-mini ${normalizeText(employee.name) === currentUserKey ? "current-user" : ""}" data-employee="${employee.dbId || employee.id}">
+                                <span>${escapeHtml(initials(employee.name))}</span>
+                                <strong>${escapeHtml(employee.name)}</strong>
+                                <small>${escapeHtml(employee.department || "Sem setor")}</small>
+                              </button>`)
+                              .join("")
+                          : `<div class="org-empty-team">Sem equipe direta</div>`
+                      }
+                      ${leader.directReports.length > reports.length ? `<div class="org-overflow">+${leader.directReports.length - reports.length}<small>outros</small></div>` : ""}
+                    </div>
+                  </div>`;
+                })
+                .join("")
             : `<div class="empty">Nenhum vínculo de liderança para desenhar neste filtro.</div>`
         }
       </div>
-      ${withoutLeader.length ? `<div class="org-alert">${withoutLeader.length} colaborador(es) sem líder definido.</div>` : ""}
+      ${withoutLeader.length ? `<div class="org-alert">${withoutLeader.length} colaborador(es) sem líder definido. Revise a coluna de gestor imediato no cadastro.</div>` : ""}
     </div>
   </div>`;
 }
@@ -6560,7 +6895,18 @@ function peopleControlDocumentSensitivity(module) {
 
 async function persistPeopleControlDocument({ employee, module, values, file, entry, summary }) {
   if (!supabaseClient || !employee?.dbId || !file?.name) return null;
-  const storagePath = `controles-rh/${employee.dbId}/${entry.id}/${file.name}`.replace(/\s+/g, "_");
+  const sensitivity = peopleControlDocumentSensitivity(module);
+  const destination = driveDestinationForEmployee(employee, module.title);
+  let uploadResult = {
+    ok: true,
+    metadata: workspaceStorage?.buildMetadata ? workspaceStorage.buildMetadata(file, driveContextForDocument(employee, module.title, sensitivity)) : {},
+    message: "Arquivo registrado sem upload externo.",
+  };
+  if (workspaceStorage?.upload) {
+    uploadResult = await workspaceStorage.upload(file, driveContextForDocument(employee, module.title, sensitivity));
+  }
+  if (!uploadResult.ok) throw new Error(uploadResult.message || "Falha ao enviar arquivo para o Google Drive.");
+  const driveMetadata = uploadResult.metadata || {};
   const payload = {
     employee_id: employee.dbId,
     title: `${module.title}: ${file.name}`,
@@ -6569,9 +6915,11 @@ async function persistPeopleControlDocument({ employee, module, values, file, en
     file_name: file.name,
     file_size_bytes: file.size || null,
     mime_type: file.type || null,
-    sensitivity: peopleControlDocumentSensitivity(module),
-    storage_bucket: "hr-employee-documents",
-    storage_path: storagePath,
+    sensitivity,
+    storage_bucket: driveMetadata.storage_provider || "google_drive",
+    storage_path: driveMetadata.drive_file_id || "",
+    drive_file_id: driveMetadata.drive_file_id || "",
+    file_url: driveMetadata.drive_view_url || "",
     status: "active",
     validation_status: "pending",
     raw_metadata: {
@@ -6579,12 +6927,18 @@ async function persistPeopleControlDocument({ employee, module, values, file, en
       module_key: module.key,
       entry_id: entry.id,
       values,
+      drive_folder_id: driveMetadata.drive_folder_id || destination.folderId || "",
+      drive_folder_url: driveWebUrlFromId(driveMetadata.drive_folder_id || destination.folderId || ""),
+      drive_destination_path: destination.employeePath,
+      upload_message: uploadResult.message || "",
     },
     metadata: {
       source: "controles_rh",
       module_key: module.key,
       entry_id: entry.id,
       actor_name: currentUser.name,
+      ...driveMetadata,
+      drive_destination_path: destination.employeePath,
     },
     uploaded_by: state.authProfile?.id || null,
   };

@@ -199,12 +199,23 @@ async function ensureFolder(accessToken: string, parentId: string, name: string,
     || await createFolder(accessToken, parentId, name, { kind, ...extraProperties });
 }
 
+async function resolveEmployeeFolder(accessToken: string, parentId: string, context: UploadContext) {
+  if (!context.employeeName) return parentId;
+  const employeeName = safeName(context.employeeName);
+  const employeeKey = context.employeeId || employeeName;
+  const employeeFolder = await ensureFolder(accessToken, parentId, employeeName, `employee:${employeeKey}`, {
+    employee_id: context.employeeId || "",
+    employee_name: employeeName,
+  });
+  return employeeFolder.id;
+}
+
 async function resolveTargetFolder(accessToken: string, context: UploadContext) {
-  if (context.driveFolderId) return context.driveFolderId;
+  if (context.driveFolderId) return resolveEmployeeFolder(accessToken, context.driveFolderId, context);
   if (!rootFolderId) throw new Error("GOOGLE_DRIVE_ROOT_FOLDER_ID is not configured.");
 
   const company = normalizeCompany(context.company);
-  if (!company) return rootFolderId;
+  if (!company) return resolveEmployeeFolder(accessToken, rootFolderId, context);
 
   const companyFolder = await ensureFolder(accessToken, rootFolderId, company, `company:${company}`, { company });
   const moduleName = moduleForDocumentType(context.documentType);
@@ -212,7 +223,7 @@ async function resolveTargetFolder(accessToken: string, context: UploadContext) 
     company,
     module: moduleName,
   });
-  return moduleFolder.id;
+  return resolveEmployeeFolder(accessToken, moduleFolder.id, context);
 }
 
 async function uploadToDrive(file: File, context: UploadContext) {

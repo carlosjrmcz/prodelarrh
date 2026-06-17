@@ -3268,6 +3268,175 @@ td {
   color: #9a3412;
 }
 
+.org-visual {
+  display: grid;
+  gap: 18px;
+}
+
+.org-hero {
+  align-items: stretch;
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(260px, 1fr) minmax(280px, 0.8fr);
+}
+
+.org-root-card,
+.org-metrics,
+.org-leader-card,
+.org-person,
+.org-person-mini,
+.org-overflow {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.org-root-card {
+  align-items: center;
+  background: linear-gradient(135deg, #eaf7f3, #fff);
+  display: flex;
+  gap: 14px;
+  padding: 18px;
+}
+
+.org-avatar,
+.org-mini-avatar,
+.org-person-mini span {
+  align-items: center;
+  background: var(--brand);
+  color: #fff;
+  display: inline-flex;
+  font-weight: 800;
+  justify-content: center;
+}
+
+.org-avatar {
+  border-radius: 20px;
+  font-size: 22px;
+  height: 64px;
+  width: 64px;
+}
+
+.org-root-card strong,
+.org-person strong,
+.org-person-mini strong {
+  color: var(--ink);
+  display: block;
+}
+
+.org-root-card span,
+.org-person small,
+.org-person-mini small,
+.org-metrics span,
+.org-overflow small {
+  color: var(--muted);
+  display: block;
+  font-size: 12px;
+}
+
+.org-metrics {
+  background: #fff;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(3, 1fr);
+  padding: 14px;
+}
+
+.org-metrics div {
+  border-left: 4px solid var(--brand);
+  padding-left: 10px;
+}
+
+.org-metrics strong {
+  display: block;
+  font-size: 24px;
+}
+
+.org-tree-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(270px, 1fr));
+}
+
+.org-leader-card {
+  background: #fff;
+  box-shadow: 0 12px 26px rgba(15, 23, 42, 0.05);
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+}
+
+.org-leader-card.current-user {
+  border-color: var(--brand);
+  box-shadow: inset 4px 0 0 var(--brand), 0 12px 26px rgba(15, 23, 42, 0.05);
+}
+
+.org-person,
+.org-person-mini {
+  background: #fbfcfd;
+  color: var(--ink);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.org-person {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  padding: 10px;
+}
+
+.org-person:hover,
+.org-person-mini:hover {
+  border-color: rgba(31, 122, 109, 0.45);
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.08);
+}
+
+.org-mini-avatar,
+.org-person-mini span {
+  border-radius: 999px;
+  flex: 0 0 auto;
+  height: 34px;
+  width: 34px;
+}
+
+.org-team-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+}
+
+.org-person-mini {
+  align-items: center;
+  display: grid;
+  gap: 4px;
+  min-height: 88px;
+  padding: 10px;
+}
+
+.org-person-mini.current-user {
+  border-color: var(--brand);
+  background: #eaf7f3;
+}
+
+.org-overflow {
+  align-items: center;
+  background: #f8fafc;
+  color: var(--ink);
+  display: grid;
+  font-weight: 800;
+  min-height: 88px;
+  padding: 10px;
+  text-align: center;
+}
+
+.org-empty-team {
+  border: 1px dashed #bfd0e0;
+  border-radius: 8px;
+  color: var(--muted);
+  padding: 12px;
+}
+
 .profile {
   display: grid;
   grid-template-columns: 180px 1fr;
@@ -3365,6 +3534,81 @@ td {
 .employee-control-action {
   min-height: 108px;
   text-align: left;
+}
+
+.employee-control-action small {
+  color: var(--muted);
+  display: block;
+  font-size: 12px;
+  line-height: 1.35;
+  margin-top: 8px;
+}
+
+.employee-control-action em {
+  color: var(--brand);
+  display: block;
+  font-style: normal;
+  font-weight: 800;
+  margin-top: 10px;
+}
+
+.employee-drive-card {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.drive-summary {
+  display: grid;
+  gap: 10px;
+}
+
+.drive-summary > div,
+.drive-module-row {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+  padding: 12px;
+}
+
+.drive-summary span,
+.drive-module-row span,
+.drive-module-row small {
+  color: var(--muted);
+  display: block;
+  font-size: 12px;
+}
+
+.drive-summary strong,
+.drive-module-row strong {
+  color: var(--ink);
+  display: block;
+  margin: 4px 0 8px;
+}
+
+.drive-module-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.drive-module-row {
+  align-items: center;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 1fr auto;
+}
+
+.slim-notice {
+  margin-bottom: 14px;
+}
+
+.doc-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
 }
 
 .doc {
@@ -3678,6 +3922,7 @@ td {
   .communication-composer-grid,
   .communication-audience-grid,
   .communication-final-meta,
+  .org-hero,
   .routine-grid,
   .master-editor-grid,
   .paystub-filter-grid,
@@ -3689,7 +3934,8 @@ td {
 
   .people-control-fields,
   .admission-link-result,
-  .employee-document-form {
+  .employee-document-form,
+  .drive-module-row {
     grid-template-columns: 1fr;
   }
 
