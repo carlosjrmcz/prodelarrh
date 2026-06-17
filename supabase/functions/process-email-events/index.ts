@@ -12,6 +12,7 @@ type EmailEvent = {
   bcc: string[];
   subject: string | null;
   template_key: string;
+  employee_id: string | null;
   payload: Record<string, unknown>;
   attempts: number;
   related_table: string | null;
@@ -59,8 +60,16 @@ function renderTemplate(template: string, payload: Record<string, unknown>) {
   });
 }
 
+function removeUnresolvedPlaceholders(value: string) {
+  return value.replace(/\{\{[^}]+\}\}/g, "");
+}
+
+function resolveTextTemplate(template: string, payload: Record<string, unknown>) {
+  return removeUnresolvedPlaceholders(renderTemplate(template, payload));
+}
+
 function renderHtmlTemplate(template: string, payload: Record<string, unknown>) {
-  return renderTemplate(template, payload).replace(/\\n/g, "<br>");
+  return removeUnresolvedPlaceholders(renderTemplate(template, payload)).replace(/\\n/g, "<br>");
 }
 
 function normalizeCompanyLogoKey(value: unknown) {
@@ -80,6 +89,43 @@ function payloadWithCompanyLogo(payload: Record<string, unknown>) {
   return {
     ...payload,
     empresa_logo_url: companyLogoUrls[companyKey] ?? companyLogoUrls.prodelar,
+  };
+}
+
+function formatDatePtBr(value: unknown) {
+  if (!value) return "";
+  const date = new Date(String(value));
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleDateString("pt-BR");
+}
+
+async function employeePayloadForEvent(event: EmailEvent) {
+  if (!event.employee_id) return {};
+
+  const { data: employee, error } = await supabase
+    .from("hr_employee_directory")
+    .select("full_name,company_name,position_name,department_name,manager_name,admission_date,status")
+    .eq("id", event.employee_id)
+    .maybeSingle<{
+      full_name: string | null;
+      company_name: string | null;
+      position_name: string | null;
+      department_name: string | null;
+      manager_name: string | null;
+      admission_date: string | null;
+      status: string | null;
+    }>();
+
+  if (error || !employee) return {};
+
+  return {
+    colaborador_nome: employee.full_name ?? "",
+    empresa: employee.company_name ?? "",
+    cargo: employee.position_name ?? "",
+    departamento: employee.department_name ?? "",
+    gestor_nome: employee.manager_name ?? "",
+    data_admissao: formatDatePtBr(employee.admission_date),
+    status: employee.status ?? "",
   };
 }
 
@@ -277,9 +323,15 @@ async function processEvent(event: EmailEvent) {
     throw new Error(templateError?.message ?? `Template not found: ${event.app_name}/${event.template_key}`);
   }
 
-  const payload = payloadWithCompanyLogo(event.payload ?? {});
-  const subject = event.subject || renderTemplate(template.subject_template, payload);
-  const body = renderTemplate(template.body_template, payload);
+  const employeePayload = await employeePayloadForEvent(event);
+  const payload = payloadWithCompanyLogo({
+    ...employeePayload,
+    data_hora: new Date().toLocaleString("pt-BR"),
+    link: "https://rh.grupoprodelar.com.br",
+    ...(event.payload ?? {}),
+  });
+  const subject = event.subject || resolveTextTemplate(template.subject_template, payload);
+  const body = resolveTextTemplate(template.body_template, payload);
   const htmlBody = template.body_html_template
     ? renderHtmlTemplate(template.body_html_template, payload)
     : buildStandardHtml(subject, body, event);
